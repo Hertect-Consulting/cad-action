@@ -1,0 +1,12 @@
+---
+description: Example cursor rule.
+globs: src/**/*.ts
+alwaysApply: true
+---
+
+## Rule: Cursor note
+What: Follow TypeScript conventions.
+Applies to: the globs above
+Check: `npm run typecheck` passes.
+Owner: @example
+Reviewed: 2026-09-16

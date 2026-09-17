@@ -1,0 +1,36 @@
+---
+description: Build output stays in sync with source.
+globs: src/**/*.ts
+alwaysApply: true
+---
+
+<!-- Template by Ctrl Alt Delegate, a Hertect Consulting product. CC BY 4.0. -->
+<!-- Save as .cursor/rules/<name>.mdc. Set alwaysApply true for a Rule, false for a Skill. -->
+
+Read AGENTS.md at the repo root first.
+
+## Rule: Keep the build current
+What: Rebuild before committing a source change.
+Applies to: the globs above
+Check: `npm run build` passes.
+Owner: @handle
+Reviewed: 2026-09-16
+
+Copy the shape below for the next Cursor rule. Save it as its own `.mdc` file — one rule (or Skill) per file:
+
+```
+---
+description: One sentence saying what this rule is for.
+globs: src/**/*.ts
+alwaysApply: false
+---
+
+## Rule: <name>
+What: One plain sentence.
+Applies to: the globs above
+Check: A command that passes, or something visible in the PR.
+Owner: @handle
+Reviewed: YYYY-MM-DD
+```
+
+<!-- Checkable by Ctrl Alt Delegate. -->

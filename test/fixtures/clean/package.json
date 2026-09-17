@@ -1,0 +1,7 @@
+{
+  "name": "clean-fixture",
+  "scripts": {
+    "verify-instructions": "node scripts/verify.js",
+    "test": "vitest run"
+  }
+}

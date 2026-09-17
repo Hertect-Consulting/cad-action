@@ -1,0 +1,36 @@
+name: "Ctrl Alt Delegate"
+description: "Checks the rules and skills your AI coding agents follow and fails the pull request when they're wrong. Free for any repo."
+author: "Hertect Consulting"
+branding:
+  icon: "check-square"
+  color: "purple"
+
+inputs:
+  paths:
+    description: "Extra file globs to discover, on top of the built-in rules-and-skills set (AGENTS.md, CLAUDE.md, .github/copilot-instructions.md, .cursor/rules/**/*.mdc, .cursorrules, GEMINI.md, **/SKILL.md). Comma or newline separated."
+    required: false
+    default: ""
+  fail-on:
+    description: "Which findings fail the check: all, none, or dead-only (dead command + dead path findings only)."
+    required: false
+    default: "all"
+  allow-commands:
+    description: "Extra command names to allow in Check/What lines, beyond the built-in allow list. Comma or newline separated."
+    required: false
+    default: ""
+  token:
+    description: "Token used to post the sticky PR comment. Defaults to GITHUB_TOKEN."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  findings-json:
+    description: "JSON summary of every finding, grouped by check."
+  finding-count:
+    description: "Total number of findings."
+  conclusion:
+    description: "success or failure, per the fail-on input."
+
+runs:
+  using: "node20"
+  main: "dist/index.js"

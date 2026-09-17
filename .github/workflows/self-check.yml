@@ -1,0 +1,22 @@
+name: Ctrl Alt Delegate (self-check)
+
+on:
+  pull_request:
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  self-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          # This repo's own test/fixtures/** deliberately contain broken
+          # instruction files (that's what the four checks are tested
+          # against), so a full-repo scan always has findings there. The
+          # real correctness gate is `npm test` in ci.yml; this job is a
+          # live dogfood run and evidence, not a merge gate.
+          fail-on: none

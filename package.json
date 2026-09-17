@@ -1,0 +1,26 @@
+{
+  "name": "ctrl-alt-delegate-action",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Checks the instruction files your AI coding agents follow and fails the pull request when they're wrong.",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check-dist": "npm run build && git diff --exit-code dist"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vercel/ncc": "^0.45.0",
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.1"
+  }
+}
