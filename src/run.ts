@@ -3,6 +3,7 @@ import { checkDeadCommand } from "./checks/deadCommand.js";
 import { checkDeadPath } from "./checks/deadPath.js";
 import { checkNoCheckLine } from "./checks/noCheck.js";
 import { discoverFiles } from "./discovery.js";
+import { buildInventory } from "./inventory.js";
 import { parseFiles } from "./parser.js";
 import type { Finding, RunOptions, RunResult } from "./types.js";
 
@@ -30,6 +31,7 @@ export function run(options: RunOptions): RunResult {
     findings,
     ruleCount: rules.length,
     fileCount: files.length,
+    inventory: buildInventory(files, rules),
     conclusion: gating.length > 0 ? "failure" : "success",
   };
 }

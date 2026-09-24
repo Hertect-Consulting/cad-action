@@ -55,9 +55,33 @@ export interface RunOptions {
   extraAllowCommands: string[];
 }
 
+export interface InventoryTool {
+  kind: FileKind;
+  /** Human-facing name, e.g. "Cursor rules". */
+  label: string;
+  fileCount: number;
+}
+
+/**
+ * What the Action found, independent of whether anything is wrong with it. A
+ * repository with no findings still has an inventory, which is the point: it is
+ * the one thing this Action can show that a linter cannot.
+ */
+export interface Inventory {
+  fileCount: number;
+  ruleCount: number;
+  toolCount: number;
+  tools: InventoryTool[];
+  /** Rules carrying an Owner line. Recorded, not verified. */
+  ownedRuleCount: number;
+  /** Rules carrying a Reviewed line. Recorded, not judged current. */
+  reviewedRuleCount: number;
+}
+
 export interface RunResult {
   findings: Finding[];
   ruleCount: number;
   fileCount: number;
+  inventory: Inventory;
   conclusion: "success" | "failure";
 }

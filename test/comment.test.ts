@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { buildComment, COMMENT_MARKER } from "../src/comment.js";
-import type { RunResult } from "../src/types.js";
+import type { Inventory, RunResult } from "../src/types.js";
+
+function inventory(overrides: Partial<Inventory> = {}): Inventory {
+  return {
+    fileCount: 1,
+    ruleCount: 3,
+    toolCount: 1,
+    tools: [{ kind: "AGENTS", label: "AGENTS.md", fileCount: 1 }],
+    ownedRuleCount: 1,
+    reviewedRuleCount: 0,
+    ...overrides,
+  };
+}
 
 describe("buildComment", () => {
   it("always ends with the fixed tagline and link", () => {
-    const empty: RunResult = { findings: [], ruleCount: 3, fileCount: 1, conclusion: "success" };
+    const empty: RunResult = {
+      findings: [],
+      ruleCount: 3,
+      fileCount: 1,
+      inventory: inventory(),
+      conclusion: "success",
+    };
     const body = buildComment(empty);
     expect(body.trimEnd().endsWith(
       "Receipts for one repo. Ctrl Alt Delegate keeps them for all of yours.\n" +
@@ -13,7 +31,13 @@ describe("buildComment", () => {
   });
 
   it("carries the sticky marker for comment upsert", () => {
-    const empty: RunResult = { findings: [], ruleCount: 0, fileCount: 0, conclusion: "success" };
+    const empty: RunResult = {
+      findings: [],
+      ruleCount: 0,
+      fileCount: 0,
+      inventory: inventory({ fileCount: 0, ruleCount: 0, toolCount: 0, tools: [], ownedRuleCount: 0 }),
+      conclusion: "success",
+    };
     expect(buildComment(empty)).toContain(COMMENT_MARKER);
   });
 
@@ -21,6 +45,7 @@ describe("buildComment", () => {
     const result: RunResult = {
       ruleCount: 1,
       fileCount: 1,
+      inventory: inventory({ ruleCount: 1 }),
       conclusion: "failure",
       findings: [
         {
@@ -36,5 +61,71 @@ describe("buildComment", () => {
     expect(body).toContain("### Dead command (1)");
     expect(body).toContain("AGENTS.md:7");
     expect(body).toContain("looked for `foo`");
+  });
+
+  // The inventory is the reason this Action is worth running on a repository
+  // that turns out to be clean, so a clean run must still say what exists.
+  it("shows the inventory even when there are no findings", () => {
+    const clean: RunResult = {
+      findings: [],
+      ruleCount: 41,
+      fileCount: 6,
+      inventory: inventory({
+        fileCount: 6,
+        ruleCount: 41,
+        toolCount: 3,
+        tools: [
+          { kind: "AGENTS", label: "AGENTS.md", fileCount: 2 },
+          { kind: "CURSOR_MDC", label: "Cursor rules", fileCount: 2 },
+          { kind: "SKILL", label: "SKILL.md", fileCount: 2 },
+        ],
+        ownedRuleCount: 4,
+        reviewedRuleCount: 12,
+      }),
+      conclusion: "success",
+    };
+    const body = buildComment(clean);
+    expect(body).toContain("**6 instruction files · 3 tools · 41 rules**");
+    expect(body).toContain("AGENTS.md ×2 · Cursor rules ×2 · SKILL.md ×2");
+    expect(body).toContain("4 of 41 name an owner. 12 record a review date.");
+    expect(body).toContain("No findings.");
+  });
+
+  it("puts the inventory above the findings", () => {
+    const result: RunResult = {
+      ruleCount: 2,
+      fileCount: 1,
+      inventory: inventory({ ruleCount: 2 }),
+      conclusion: "failure",
+      findings: [
+        { check: "no-check", file: "AGENTS.md", line: 3, sentence: "No Check line." },
+      ],
+    };
+    const body = buildComment(result);
+    expect(body.indexOf("instruction file")).toBeLessThan(body.indexOf("### No Check line"));
+  });
+
+  it("singularises counts of one", () => {
+    const one: RunResult = {
+      findings: [],
+      ruleCount: 1,
+      fileCount: 1,
+      inventory: inventory({ fileCount: 1, ruleCount: 1, toolCount: 1 }),
+      conclusion: "success",
+    };
+    expect(buildComment(one)).toContain("**1 instruction file · 1 tool · 1 rule**");
+  });
+
+  it("says so plainly when the repository has no instruction files", () => {
+    const none: RunResult = {
+      findings: [],
+      ruleCount: 0,
+      fileCount: 0,
+      inventory: inventory({ fileCount: 0, ruleCount: 0, toolCount: 0, tools: [], ownedRuleCount: 0 }),
+      conclusion: "success",
+    };
+    const body = buildComment(none);
+    expect(body).toContain("No instruction or skill files found in this repository.");
+    expect(body).not.toContain("name an owner");
   });
 });

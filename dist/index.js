@@ -37190,8 +37190,9 @@ const TAGLINE = "Receipts for one repo. Ctrl Alt Delegate keeps them for all of 
 const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)";
 function buildComment(result) {
     const lines = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
+    lines.push(...inventoryLines(result.inventory));
     if (result.findings.length === 0) {
-        lines.push(`No findings across ${result.ruleCount} rule(s) in ${result.fileCount} file(s).`, "");
+        lines.push("No findings.", "");
     }
     else {
         for (const check of CHECK_ORDER) {
@@ -37208,6 +37209,33 @@ function buildComment(result) {
     lines.push(TAGLINE);
     lines.push(TAGLINE_LINK);
     return lines.join("\n");
+}
+/**
+ * What exists, before what is wrong with it. A reader who runs this on a clean
+ * repository still sees something: the shape of their own instruction layer,
+ * which is what the full product keeps across every repository rather than one.
+ */
+function inventoryLines(inventory) {
+    if (inventory.fileCount === 0) {
+        return ["No instruction or skill files found in this repository.", ""];
+    }
+    const headline = [
+        plural(inventory.fileCount, "instruction file"),
+        plural(inventory.toolCount, "tool"),
+        plural(inventory.ruleCount, "rule"),
+    ].join(" · ");
+    const tools = inventory.tools
+        .map((t) => (t.fileCount > 1 ? `${t.label} ×${t.fileCount}` : t.label))
+        .join(" · ");
+    const lines = [`**${headline}**`, "", tools, ""];
+    if (inventory.ruleCount > 0) {
+        lines.push(`${inventory.ownedRuleCount} of ${inventory.ruleCount} name an owner. ` +
+            `${inventory.reviewedRuleCount} record a review date.`, "");
+    }
+    return lines;
+}
+function plural(count, noun) {
+    return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 function formatFindingLine(f) {
     const lookedFor = f.lookedFor ? ` — looked for \`${f.lookedFor}\`` : "";
@@ -37757,6 +37785,60 @@ function guessExtraKind(path) {
     return classify(path) ?? "AGENTS";
 }
 
+;// CONCATENATED MODULE: ./src/inventory.ts
+/**
+ * The label a reader recognises, not the internal kind. "Cursor rules" rather
+ * than CURSOR_MDC, because this line is read by someone deciding whether the
+ * Action understood their repository.
+ */
+const TOOL_LABEL = {
+    AGENTS: "AGENTS.md",
+    CLAUDE: "CLAUDE.md",
+    COPILOT: "Copilot instructions",
+    CURSOR_MDC: "Cursor rules",
+    CURSORRULES: ".cursorrules",
+    GEMINI: "GEMINI.md",
+    SKILL: "SKILL.md",
+};
+/** Fixed so the same repository always renders the same line. */
+const TOOL_ORDER = [
+    "AGENTS",
+    "CLAUDE",
+    "COPILOT",
+    "CURSOR_MDC",
+    "CURSORRULES",
+    "GEMINI",
+    "SKILL",
+];
+/**
+ * What exists, counted from what was already discovered and parsed. This adds
+ * no file reads and no parsing of its own: `files` and `rules` are the same
+ * values the checks ran against, so the inventory cannot disagree with them.
+ *
+ * Ownership and review are counted as "recorded", never as "current". Whether a
+ * review is still valid needs the history this Action deliberately does not
+ * keep, so the count says how many rules carry the line and stops there.
+ */
+function buildInventory(files, rules) {
+    const byKind = new Map();
+    for (const file of files) {
+        byKind.set(file.kind, (byKind.get(file.kind) ?? 0) + 1);
+    }
+    const tools = TOOL_ORDER.filter((kind) => byKind.has(kind)).map((kind) => ({
+        kind,
+        label: TOOL_LABEL[kind],
+        fileCount: byKind.get(kind),
+    }));
+    return {
+        fileCount: files.length,
+        ruleCount: rules.length,
+        toolCount: tools.length,
+        tools,
+        ownedRuleCount: rules.filter((r) => Boolean(r.owner?.trim())).length,
+        reviewedRuleCount: rules.filter((r) => Boolean(r.reviewed?.trim())).length,
+    };
+}
+
 ;// CONCATENATED MODULE: ./src/parser.ts
 const FIELD_RE = {
     whatText: /^What:\s*(.*)$/i,
@@ -37918,6 +38000,7 @@ function parseFiles(files) {
 
 
 
+
 function run(options) {
     const files = discoverFiles(options.root, { extraPaths: options.extraPaths });
     const rules = parseFiles(files);
@@ -37937,6 +38020,7 @@ function run(options) {
         findings,
         ruleCount: rules.length,
         fileCount: files.length,
+        inventory: buildInventory(files, rules),
         conclusion: gating.length > 0 ? "failure" : "success",
     };
 }

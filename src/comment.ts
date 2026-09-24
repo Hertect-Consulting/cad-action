@@ -1,4 +1,4 @@
-import type { CheckId, Finding, RunResult } from "./types.js";
+import type { CheckId, Finding, Inventory, RunResult } from "./types.js";
 
 export const COMMENT_MARKER = "<!-- ctrl-alt-delegate-action:sticky-comment -->";
 
@@ -16,11 +16,10 @@ const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-a
 export function buildComment(result: RunResult): string {
   const lines: string[] = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
 
+  lines.push(...inventoryLines(result.inventory));
+
   if (result.findings.length === 0) {
-    lines.push(
-      `No findings across ${result.ruleCount} rule(s) in ${result.fileCount} file(s).`,
-      "",
-    );
+    lines.push("No findings.", "");
   } else {
     for (const check of CHECK_ORDER) {
       const items = result.findings.filter((f) => f.check === check);
@@ -36,6 +35,43 @@ export function buildComment(result: RunResult): string {
   lines.push(TAGLINE);
   lines.push(TAGLINE_LINK);
   return lines.join("\n");
+}
+
+/**
+ * What exists, before what is wrong with it. A reader who runs this on a clean
+ * repository still sees something: the shape of their own instruction layer,
+ * which is what the full product keeps across every repository rather than one.
+ */
+function inventoryLines(inventory: Inventory): string[] {
+  if (inventory.fileCount === 0) {
+    return ["No instruction or skill files found in this repository.", ""];
+  }
+
+  const headline = [
+    plural(inventory.fileCount, "instruction file"),
+    plural(inventory.toolCount, "tool"),
+    plural(inventory.ruleCount, "rule"),
+  ].join(" · ");
+
+  const tools = inventory.tools
+    .map((t) => (t.fileCount > 1 ? `${t.label} ×${t.fileCount}` : t.label))
+    .join(" · ");
+
+  const lines = [`**${headline}**`, "", tools, ""];
+
+  if (inventory.ruleCount > 0) {
+    lines.push(
+      `${inventory.ownedRuleCount} of ${inventory.ruleCount} name an owner. ` +
+        `${inventory.reviewedRuleCount} record a review date.`,
+      "",
+    );
+  }
+
+  return lines;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function formatFindingLine(f: Finding): string {
