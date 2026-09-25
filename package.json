@@ -1,5 +1,5 @@
 {
-  "name": "ctrl-alt-delegate-action",
+  "name": "cad-action",
   "version": "0.0.0",
   "private": true,
   "description": "Checks the instruction files your AI coding agents follow and fails the pull request when they're wrong.",

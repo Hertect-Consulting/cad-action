@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Hertect-Consulting/ctrl-alt-delegate-action@v1
+      - uses: Hertect-Consulting/cad-action@v1
 ```
 
 `fail-on` sets what fails the check: `all` (default), `dead-only` (dead command and dead path findings only), or `none` to report without going red. `paths` adds extra file globs to discover, on top of the built-in rules-and-skills list below.
@@ -72,7 +72,7 @@ Writes to your repo, opens PRs, rewrites your rules, sends your data anywhere, l
 
 ## Notes
 
-- If your GitHub organization restricts Actions to verified creators, add `Hertect-Consulting/ctrl-alt-delegate-action` to the allow list first: Organization Settings → Actions → General → Policies.
+- If your GitHub organization restricts Actions to verified creators, add `Hertect-Consulting/cad-action` to the allow list first: Organization Settings → Actions → General → Policies.
 - Pull requests from forks get a read-only token, so CAD can't post a PR comment there — it writes findings to the job summary instead. Same-repo PRs still get the sticky comment.
 
 ---

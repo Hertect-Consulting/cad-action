@@ -18,16 +18,16 @@ describe("isForkPullRequest", () => {
 
   it("is false when head and base repos match", () => {
     setPullRequestPayload({
-      head: { repo: { full_name: "Hertect-Consulting/ctrl-alt-delegate-action" } },
-      base: { repo: { full_name: "Hertect-Consulting/ctrl-alt-delegate-action" } },
+      head: { repo: { full_name: "Hertect-Consulting/cad-action" } },
+      base: { repo: { full_name: "Hertect-Consulting/cad-action" } },
     });
     expect(isForkPullRequest()).toBe(false);
   });
 
   it("is true when the head repo is a fork", () => {
     setPullRequestPayload({
-      head: { repo: { full_name: "someone-else/ctrl-alt-delegate-action" } },
-      base: { repo: { full_name: "Hertect-Consulting/ctrl-alt-delegate-action" } },
+      head: { repo: { full_name: "someone-else/cad-action" } },
+      base: { repo: { full_name: "Hertect-Consulting/cad-action" } },
     });
     expect(isForkPullRequest()).toBe(true);
   });
