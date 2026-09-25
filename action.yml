@@ -1,4 +1,4 @@
-name: "Ctrl Alt Delegate"
+name: "Ctrl Alt Delegate Checks"
 description: "Checks the rules and skills your AI coding agents follow and fails the pull request when they're wrong. Free for any repo."
 author: "Hertect Consulting"
 branding:
