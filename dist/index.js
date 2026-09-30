@@ -37260,6 +37260,27 @@ function extractBacktickedCommands(text) {
 function firstToken(command) {
     return command.trim().split(/\s+/)[0] ?? "";
 }
+/**
+ * If `command` invokes a package.json script, returns the script name;
+ * otherwise null. Recognises `npm run X`, `npm run-script X`, `npm test`,
+ * `npm start`, `pnpm run X`, and `yarn run X`. The bare `pnpm X` / `yarn X`
+ * forms are left alone on purpose: `yarn install` is not a script.
+ */
+function packageScriptInvocation(command) {
+    const parts = command.trim().split(/\s+/);
+    const [tool, sub, name] = parts;
+    if (!tool || !sub)
+        return null;
+    const t = tool.replace(/^\.\//, "").toLowerCase();
+    if (t === "npm" && (sub === "test" || sub === "start"))
+        return sub;
+    if ((t === "npm" || t === "pnpm" || t === "yarn") && (sub === "run" || sub === "run-script")) {
+        if (!name || name.startsWith("-"))
+            return null;
+        return name;
+    }
+    return null;
+}
 const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const PATH_LIKE_RE = /^[.\w][\w.\-/*]*$/;
 /**
@@ -37301,11 +37322,15 @@ function extractPathLikeTokens(text) {
 
 ;// CONCATENATED MODULE: ./src/checks/shared.ts
 /**
- * Fields eligible for checks 1 (dead command) and 2 (dead path): the
- * What/Applies to/Check lines of five-line-shape rules, and the derived
- * What-to-do/Check sections of a Skill. Heading-block rules have no such
- * fields — they are handled separately by check 3 only, per the brief.
+ * The lines of a heading-block rule with their 1-based file line numbers,
+ * for the two narrow prose scans (package.json scripts, moved files).
+ * Empty for every other shape, whose fields come from scannableFields.
  */
+function headingBlockLines(rule) {
+    if (rule.shape !== "heading")
+        return [];
+    return rule.bodyText.split(/\r?\n/).map((text, i) => ({ text, line: rule.bodyStartLine + i }));
+}
 function scannableFields(rule) {
     if (rule.shape === "heading")
         return [];
@@ -37567,14 +37592,41 @@ function definitions_isDefined(token, defs) {
 
 
 
+/**
+ * A backticked `npm run X` (or npm test/start, pnpm run, yarn run) whose
+ * script is not in package.json. Precise enough to run on prose too: the
+ * probe over three real repos found two true hits and no false ones.
+ */
+function deadScriptFinding(rule, text, line, defs) {
+    const out = [];
+    for (const cmd of extractBacktickedCommands(text)) {
+        const script = packageScriptInvocation(cmd);
+        if (!script || defs.packageScripts.has(script))
+            continue;
+        out.push({
+            check: "dead-command",
+            file: rule.file,
+            line,
+            sentence: `Dead command: \`${cmd}\` — package.json has no script named \`${script}\`.`,
+            lookedFor: script,
+        });
+    }
+    return out;
+}
 function checkDeadCommand(root, rules, extraAllow) {
     const defs = loadDefinedCommands(root);
     const findings = [];
     for (const rule of rules) {
+        for (const { text, line } of headingBlockLines(rule)) {
+            findings.push(...deadScriptFinding(rule, text, line, defs));
+        }
         for (const field of scannableFields(rule)) {
             if (field.field === "appliesTo")
                 continue; // spec: "a Check or What line"
+            findings.push(...deadScriptFinding(rule, field.text, field.line, defs));
             for (const cmd of extractBacktickedCommands(field.text)) {
+                if (packageScriptInvocation(cmd))
+                    continue; // already judged above
                 const token = firstToken(cmd);
                 if (!token)
                     continue;
@@ -37648,11 +37700,45 @@ function globExpand(pattern, allPaths) {
 
 
 
+/**
+ * The prose case worth flagging: a backticked file path whose first folder
+ * is real. `scripts/rotate-keys.sh` after the script moved, not `origin/main`
+ * or `application/json`. Requires a slash, no glob, and a file extension.
+ */
+function isFileInsideExistingFolder(token, allFiles) {
+    const slash = token.indexOf("/");
+    if (slash <= 0 || token.includes("*"))
+        return false;
+    if (!/\.[A-Za-z0-9]{1,8}$/.test(token))
+        return false;
+    const folder = token.slice(0, slash + 1);
+    return allFiles.some((f) => f.startsWith(folder));
+}
 function checkDeadPath(root, rules) {
     const allFiles = listFiles(root);
     const findings = [];
     const seen = new Set();
     for (const rule of rules) {
+        for (const { text, line } of headingBlockLines(rule)) {
+            for (const span of extractBacktickedCommands(text)) {
+                for (const token of extractPathLikeTokens(span)) {
+                    if (!isFileInsideExistingFolder(token, allFiles))
+                        continue;
+                    const key = `${rule.file}:${line}:${token}`;
+                    if (seen.has(key) || fileExists(root, token))
+                        continue;
+                    seen.add(key);
+                    const slash = token.indexOf("/");
+                    findings.push({
+                        check: "dead-path",
+                        file: rule.file,
+                        line,
+                        sentence: `Dead path: \`${token}\` — \`${token.slice(0, slash + 1)}\` exists but has no \`${token.slice(slash + 1)}\`.`,
+                        lookedFor: token,
+                    });
+                }
+            }
+        }
         for (const field of scannableFields(rule)) {
             for (const token of extractPathLikeTokens(field.text)) {
                 const key = `${rule.file}:${field.line}:${token}`;

@@ -25,6 +25,8 @@ const ALL_FIXTURES = [
   "no-check",
   "contradiction-command",
   "contradiction-version",
+  "dead-script",
+  "dead-path-prose",
 ];
 
 describe("clean fixture", () => {
@@ -50,6 +52,30 @@ describe("check 1 — dead command", () => {
   it("stays silent on the clean fixture", () => {
     expect(byCheck(findingsFor("clean"), "dead-command")).toEqual([]);
   });
+
+  it("fires when a five-line Check runs a package.json script that does not exist", () => {
+    const findings = byCheck(findingsFor("dead-script"), "dead-command").filter((f) => f.file === "AGENTS.md");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].line).toBe(6);
+    expect(findings[0].lookedFor).toBe("lint");
+    expect(findings[0].sentence).toBe("Dead command: `npm run lint` — package.json has no script named `lint`.");
+  });
+
+  it("fires when a heading-block sentence runs a package.json script that does not exist", () => {
+    const findings = byCheck(findingsFor("dead-script"), "dead-command").filter((f) => f.file === "GEMINI.md");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].line).toBe(4);
+    expect(findings[0].lookedFor).toBe("deploy:staging");
+  });
+
+  it("stays silent on scripts that exist, including npm test and pnpm run", () => {
+    const findings = byCheck(findingsFor("dead-script"), "dead-command");
+    expect(findings.map((f) => f.lookedFor).sort()).toEqual(["deploy:staging", "lint"]);
+  });
+
+  it("does not treat every backticked word in a heading block as a command", () => {
+    expect(byCheck(findingsFor("dead-path-prose"), "dead-command")).toEqual([]);
+  });
 });
 
 describe("check 2 — dead path", () => {
@@ -61,6 +87,15 @@ describe("check 2 — dead path", () => {
 
   it("stays silent on the clean fixture", () => {
     expect(byCheck(findingsFor("clean"), "dead-path")).toEqual([]);
+  });
+
+  it("fires in a heading block only when the folder exists and the file does not", () => {
+    const findings = byCheck(findingsFor("dead-path-prose"), "dead-path");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].file).toBe("AGENTS.md");
+    expect(findings[0].line).toBe(5);
+    expect(findings[0].lookedFor).toBe("scripts/rotate-keys.sh");
+    expect(findings[0].sentence).toBe("Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`.");
   });
 });
 

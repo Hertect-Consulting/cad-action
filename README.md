@@ -34,8 +34,8 @@ jobs:
 
 Four checks, each a finding with file, line, and one sentence:
 
-1. **Dead command.** A Check or What line backticks a command nothing defines. Finding: `` Dead command: `buildit` — no package.json script, Makefile target, or CI workflow binary named `buildit`. ``
-2. **Dead path.** Applies to, What, or Check names a path or glob matching nothing at the head commit. Finding: `` Dead path: `src/legacy/**` matches no files at the head commit. ``
+1. **Dead command.** A Check or What line backticks a command nothing defines, or any line backticks `npm run`, `npm test`, `pnpm run`, or `yarn run` with a script that is not in package.json. Findings: `` Dead command: `buildit` — no package.json script, Makefile target, or CI workflow binary named `buildit`. `` and `` Dead command: `npm run lint` — package.json has no script named `lint`. ``
+2. **Dead path.** Applies to, What, or Check names a path or glob matching nothing at the head commit; or any line backticks a file inside a folder that exists when the file does not, the way a moved script leaves a stale mention behind. Findings: `` Dead path: `src/legacy/**` matches no files at the head commit. `` and `` Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`. ``
 3. **No Check line.** A rule with an empty or missing Check, or a heading-style rule with no command and no path anywhere in it. Finding: `` No Check line: "Keep the build current" has an empty or missing Check. ``
 4. **Contradiction.** Two files set a different Check for the same purpose (test, lint, build, typecheck), or state a different version for the same tool (Node, Python, Go). Finding: `` Contradiction: the test Check here is `npm test`, but `pnpm test` (CLAUDE.md) says otherwise. ``
 
