@@ -15,6 +15,25 @@ export function firstToken(command: string): string {
   return command.trim().split(/\s+/)[0] ?? "";
 }
 
+/**
+ * If `command` invokes a package.json script, returns the script name;
+ * otherwise null. Recognises `npm run X`, `npm run-script X`, `npm test`,
+ * `npm start`, `pnpm run X`, and `yarn run X`. The bare `pnpm X` / `yarn X`
+ * forms are left alone on purpose: `yarn install` is not a script.
+ */
+export function packageScriptInvocation(command: string): string | null {
+  const parts = command.trim().split(/\s+/);
+  const [tool, sub, name] = parts;
+  if (!tool || !sub) return null;
+  const t = tool.replace(/^\.\//, "").toLowerCase();
+  if (t === "npm" && (sub === "test" || sub === "start")) return sub;
+  if ((t === "npm" || t === "pnpm" || t === "yarn") && (sub === "run" || sub === "run-script")) {
+    if (!name || name.startsWith("-")) return null;
+    return name;
+  }
+  return null;
+}
+
 const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const PATH_LIKE_RE = /^[.\w][\w.\-/*]*$/;
 
