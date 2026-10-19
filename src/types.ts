@@ -49,6 +49,14 @@ export interface Finding {
   lookedFor?: string;
 }
 
+/**
+ * Something worth saying that is not wrong with the repository: shown in the
+ * comment above the findings, never counted, never gating.
+ */
+export interface Note {
+  sentence: string;
+}
+
 export interface RunOptions {
   root: string;
   extraPaths: string[];
@@ -84,5 +92,6 @@ export interface RunResult {
   ruleCount: number;
   fileCount: number;
   inventory: Inventory;
+  notes: Note[];
   conclusion: "success" | "failure";
 }

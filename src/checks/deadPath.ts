@@ -1,8 +1,8 @@
 import { dirExists, fileExists, listFiles } from "../fs-walk.js";
 import { globExpand } from "../glob.js";
-import { extractBacktickedCommands, extractPathLikeTokens } from "../scan.js";
+import { extractPathLikeTokens } from "../scan.js";
 import type { Finding, ParsedRule } from "../types.js";
-import { headingBlockLines, scannableFields } from "./shared.js";
+import { commandsIn, headingBlockLines, scannableFields } from "./shared.js";
 
 /**
  * First segments that look like a folder in prose but are not one: git
@@ -111,8 +111,9 @@ export function checkDeadPath(root: string, rules: ParsedRule[]): Finding[] {
   const seen = new Set<string>();
 
   for (const rule of rules) {
-    for (const { text, line } of headingBlockLines(rule)) {
-      for (const span of extractBacktickedCommands(text)) {
+    for (const bodyLine of headingBlockLines(rule)) {
+      const { line } = bodyLine;
+      for (const span of commandsIn(bodyLine)) {
         for (const token of extractPathLikeTokens(span)) {
           const claim = classifyProsePath(root, token, allFiles);
           if (!claim) continue;

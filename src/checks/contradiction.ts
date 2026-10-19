@@ -1,6 +1,6 @@
 import { extractBacktickedCommands, makeTargetInvocation, packageScriptInvocation, shellSegments } from "../scan.js";
 import type { Finding, ParsedRule } from "../types.js";
-import { headingBlockLines, scannableFields } from "./shared.js";
+import { commandsIn, headingBlockLines, scannableFields } from "./shared.js";
 
 // v1, narrow, nothing semantic: keyed purely by script-name family / tool name.
 const FAMILIES: { key: string; re: RegExp }[] = [
@@ -37,8 +37,9 @@ function checkCommandContradictions(rules: ParsedRule[]): Finding[] {
     // In prose only a package.json script or a Makefile target counts, the
     // two forms a sentence states exactly. `npm run deploy` in one file and
     // `npm run deploy:staging` in another is the disagreement this is for.
-    for (const { text, line } of headingBlockLines(rule)) {
-      for (const cmd of extractBacktickedCommands(text)) {
+    for (const bodyLine of headingBlockLines(rule)) {
+      const { line } = bodyLine;
+      for (const cmd of commandsIn(bodyLine)) {
         for (const part of shellSegments(cmd)) {
           if (!packageScriptInvocation(part) && !makeTargetInvocation(part)) continue;
           add({ file: rule.file, line, command: part.replace(/\s+/g, " "), noun: "command" });

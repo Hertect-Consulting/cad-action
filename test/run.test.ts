@@ -29,8 +29,14 @@ const ALL_FIXTURES = [
   "dead-path-prose",
   "dead-command-prose",
   "no-file",
+  "no-file-in-use",
+  "no-file-none",
   "hertect-tools",
 ];
+
+function resultFor(fixture: string) {
+  return run({ root: join(FIXTURES, fixture), extraPaths: [], failOn: "all", extraAllowCommands: [] });
+}
 
 describe("clean fixture", () => {
   it("has zero findings and a success conclusion", () => {
@@ -102,9 +108,14 @@ describe("check 1 — dead command", () => {
     expect(findings[0].sentence).toBe("Dead command: `make deploy` — no Makefile target named `deploy`.");
   });
 
+  it("reads every line of a shell fence as a command, skipping prompts and comments, and no line of a json fence", () => {
+    const findings = byCheck(findingsFor("dead-command-prose"), "dead-command").filter((f) => f.line > 15);
+    expect(findings.map((f) => `${f.line}:${f.lookedFor}`)).toEqual(["19:lint", "21:release"]);
+  });
+
   it("stays silent on allowed tools, installed dependencies, existing scripts and targets, chained commands, paths, and uncued spans", () => {
     const findings = byCheck(findingsFor("dead-command-prose"), "dead-command");
-    expect(findings.map((f) => f.lookedFor).sort()).toEqual(["buildit", "deploy", "typecheck"]);
+    expect(findings.map((f) => f.lookedFor).sort()).toEqual(["buildit", "deploy", "lint", "release", "typecheck"]);
   });
 });
 
@@ -159,29 +170,52 @@ describe("check 3 — no Check line", () => {
 });
 
 describe("check 5 — no instruction file", () => {
-  it("fires once per known tool the repository has no file for", () => {
-    const findings = byCheck(findingsFor("no-file"), "no-file");
-    expect(findings.map((f) => f.file)).toEqual([
+  it("is a note, not a finding, when the repository has files for other tools and nothing says the missing one is in use", () => {
+    const result = resultFor("no-file");
+    expect(byCheck(result.findings, "no-file")).toEqual([]);
+    expect(result.notes.map((n) => n.sentence)).toEqual([
+      "No instruction file for Claude Code, Cursor, Copilot and Gemini. Not a finding: nothing here says they are in use.",
+    ]);
+    expect(result.conclusion).toBe("success");
+  });
+
+  it("is a finding when the tool's own folder is present without its file", () => {
+    const result = resultFor("no-file-in-use");
+    const findings = byCheck(result.findings, "no-file");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].file).toBe("CLAUDE.md");
+    expect(findings[0].line).toBe(0);
+    expect(findings[0].sentence).toBe(
+      "No instruction file: Claude Code reads CLAUDE.md, and this repository has none at the head commit.",
+    );
+    expect(result.notes[0].sentence).toBe(
+      "No instruction file for Cursor, Copilot and Gemini. Not a finding: nothing here says they are in use.",
+    );
+    expect(result.conclusion).toBe("failure");
+  });
+
+  it("is a finding for every known tool when the repository has no instruction file at all", () => {
+    const result = resultFor("no-file-none");
+    expect(byCheck(result.findings, "no-file").map((f) => f.file)).toEqual([
       ".cursor/rules",
       ".github/copilot-instructions.md",
+      "AGENTS.md",
       "CLAUDE.md",
       "GEMINI.md",
     ]);
-    expect(findings.every((f) => f.line === 0)).toBe(true);
-    expect(findings[2].sentence).toBe(
-      "No instruction file: Claude Code reads CLAUDE.md, and this repository has none at the head commit.",
-    );
+    expect(result.notes).toEqual([]);
   });
 
-  it("stays silent when every known tool has a file, in the clean and discovery-kinds fixtures", () => {
-    expect(byCheck(findingsFor("clean"), "no-file")).toEqual([]);
-    expect(byCheck(findingsFor("discovery-kinds"), "no-file")).toEqual([]);
+  it("stays silent, with no note, when every known tool has a file", () => {
+    for (const fixture of ["clean", "discovery-kinds"]) {
+      const result = resultFor(fixture);
+      expect(byCheck(result.findings, "no-file"), fixture).toEqual([]);
+      expect(result.notes, fixture).toEqual([]);
+    }
   });
 
-  it("is a finding, so fail-on all fails and dead-only does not", () => {
-    const all = run({ root: join(FIXTURES, "no-file"), extraPaths: [], failOn: "all", extraAllowCommands: [] });
-    expect(all.conclusion).toBe("failure");
-    const dead = run({ root: join(FIXTURES, "no-file"), extraPaths: [], failOn: "dead-only", extraAllowCommands: [] });
+  it("never gates under dead-only", () => {
+    const dead = run({ root: join(FIXTURES, "no-file-in-use"), extraPaths: [], failOn: "dead-only", extraAllowCommands: [] });
     expect(dead.conclusion).toBe("success");
   });
 });
@@ -267,21 +301,22 @@ describe("allow-commands input", () => {
 // command stated two ways. Before these checks it reported two "no Check line"
 // findings and nothing else.
 describe("the hertect-tools dogfood fixture", () => {
-  it("reports the moved script, the removed scripts, the deploy disagreement, and the missing files", () => {
+  it("reports the moved script, the removed scripts, and the deploy disagreement, and notes the missing files", () => {
     const findings = findingsFor("hertect-tools");
     const summary = findings.map((f) => `${f.check} ${f.file}:${f.line}${f.lookedFor ? ` ${f.lookedFor}` : ""}`);
     expect(summary).toEqual([
       "dead-command .cursor/rules/deploy.mdc:6 deploy",
       "dead-command .cursor/rules/deploy.mdc:6 deploy:staging",
       "contradiction .cursor/rules/deploy.mdc:6",
-      "no-file .github/copilot-instructions.md:0",
       "dead-path AGENTS.md:10 scripts/rotate-keys.sh",
       "dead-command AGENTS.md:11 lint",
       "dead-command AGENTS.md:12 deploy:staging",
       "contradiction AGENTS.md:12",
       "no-check AGENTS.md:14",
       "no-check AGENTS.md:19",
-      "no-file GEMINI.md:0",
+    ]);
+    expect(resultFor("hertect-tools").notes.map((n) => n.sentence)).toEqual([
+      "No instruction file for Copilot and Gemini. Not a finding: nothing here says they are in use.",
     ]);
   });
 });

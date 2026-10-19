@@ -18,6 +18,7 @@ export function buildComment(result: RunResult): string {
   const lines: string[] = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
 
   lines.push(...inventoryLines(result.inventory));
+  for (const note of result.notes) lines.push(note.sentence, "");
 
   if (result.findings.length === 0) {
     lines.push("No findings.", "");

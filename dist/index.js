@@ -37192,6 +37192,8 @@ const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-a
 function buildComment(result) {
     const lines = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
     lines.push(...inventoryLines(result.inventory));
+    for (const note of result.notes)
+        lines.push(note.sentence, "");
     if (result.findings.length === 0) {
         lines.push("No findings.", "");
     }
@@ -37456,6 +37458,8 @@ function extractPathLikeTokens(text) {
 }
 
 ;// CONCATENATED MODULE: ./src/checks/shared.ts
+
+const SHELL_FENCES = new Set(["", "sh", "bash", "shell", "zsh", "console", "shell-session"]);
 /**
  * The lines of a heading-block rule with their 1-based file line numbers,
  * for the prose scans (scripts and targets, commands a sentence says to
@@ -37465,7 +37469,31 @@ function extractPathLikeTokens(text) {
 function headingBlockLines(rule) {
     if (rule.shape !== "heading")
         return [];
-    return rule.bodyText.split(/\r?\n/).map((text, i) => ({ text, line: rule.bodyStartLine + i }));
+    // A block never starts inside a fence: the parser ignores fenced headings.
+    let fence;
+    return rule.bodyText.split(/\r?\n/).map((text, i) => {
+        const delimiter = /^\s*(```|~~~)\s*([\w-]*)/.exec(text);
+        if (delimiter) {
+            fence = fence === undefined ? delimiter[2].toLowerCase() : undefined;
+            return { text, line: rule.bodyStartLine + i, shell: false };
+        }
+        return { text, line: rule.bodyStartLine + i, shell: fence !== undefined && SHELL_FENCES.has(fence) };
+    });
+}
+/**
+ * The commands a prose line states: its backticked spans, or, inside a
+ * shell fence, the line itself with a `$ ` prompt removed. Comments and
+ * blank lines in a fence are nothing.
+ */
+function commandsIn({ text, shell }) {
+    if (!shell)
+        return extractBacktickedCommands(text);
+    const cmd = text.trim().replace(/^\$\s+/, "");
+    return cmd && !cmd.startsWith("#") ? [cmd] : [];
+}
+/** The commands a prose line says to run: everything in a shell fence, else only cued backticks. */
+function cuedCommandsIn({ text, shell }) {
+    return shell ? commandsIn({ text, shell, line: 0 }) : extractCuedCommands(text);
 }
 function scannableFields(rule) {
     if (rule.shape === "heading")
@@ -37509,8 +37537,9 @@ function checkCommandContradictions(rules) {
         // In prose only a package.json script or a Makefile target counts, the
         // two forms a sentence states exactly. `npm run deploy` in one file and
         // `npm run deploy:staging` in another is the disagreement this is for.
-        for (const { text, line } of headingBlockLines(rule)) {
-            for (const cmd of extractBacktickedCommands(text)) {
+        for (const bodyLine of headingBlockLines(rule)) {
+            const { line } = bodyLine;
+            for (const cmd of commandsIn(bodyLine)) {
                 for (const part of shellSegments(cmd)) {
                     if (!packageScriptInvocation(part) && !makeTargetInvocation(part))
                         continue;
@@ -37810,9 +37839,9 @@ function definitions_isDefined(token, defs) {
  * judged. Precise enough to run on prose too: the probe over three real
  * repos found two true hits and no false ones.
  */
-function deadScriptFinding(rule, text, line, defs) {
+function deadScriptFinding(rule, commands, line, defs) {
     const out = [];
-    for (const cmd of extractBacktickedCommands(text)) {
+    for (const cmd of commands) {
         for (const part of shellSegments(cmd)) {
             const script = packageScriptInvocation(part);
             if (script && !defs.packageScripts.has(script)) {
@@ -37869,9 +37898,10 @@ function checkDeadCommand(root, rules, extraAllow) {
     const defs = loadDefinedCommands(root);
     const findings = [];
     for (const rule of rules) {
-        for (const { text, line } of headingBlockLines(rule)) {
-            findings.push(...deadScriptFinding(rule, text, line, defs));
-            for (const cmd of extractCuedCommands(text)) {
+        for (const bodyLine of headingBlockLines(rule)) {
+            const { line } = bodyLine;
+            findings.push(...deadScriptFinding(rule, commandsIn(bodyLine), line, defs));
+            for (const cmd of cuedCommandsIn(bodyLine)) {
                 for (const part of shellSegments(cmd)) {
                     if (!isPlainCommand(part) || !BINARY_NAME_RE.test(firstToken(part)))
                         continue;
@@ -37884,7 +37914,7 @@ function checkDeadCommand(root, rules, extraAllow) {
         for (const field of scannableFields(rule)) {
             if (field.field === "appliesTo")
                 continue; // spec: "a Check or What line"
-            findings.push(...deadScriptFinding(rule, field.text, field.line, defs));
+            findings.push(...deadScriptFinding(rule, extractBacktickedCommands(field.text), field.line, defs));
             for (const cmd of extractBacktickedCommands(field.text)) {
                 if (!isPlainCommand(cmd))
                     continue; // already judged above
@@ -38050,8 +38080,9 @@ function checkDeadPath(root, rules) {
     const findings = [];
     const seen = new Set();
     for (const rule of rules) {
-        for (const { text, line } of headingBlockLines(rule)) {
-            for (const span of extractBacktickedCommands(text)) {
+        for (const bodyLine of headingBlockLines(rule)) {
+            const { line } = bodyLine;
+            for (const span of commandsIn(bodyLine)) {
                 for (const token of extractPathLikeTokens(span)) {
                     const claim = classifyProsePath(root, token, allFiles);
                     if (!claim)
@@ -38135,6 +38166,7 @@ function checkNoCheckLine(rules) {
 }
 
 ;// CONCATENATED MODULE: ./src/checks/noFile.ts
+
 /**
  * The tools the Action knows, and the file each one reads. A SKILL.md is
  * shared between tools and counts for none of them. A repository with no
@@ -38142,36 +38174,59 @@ function checkNoCheckLine(rules) {
  * way an instruction layer can be wrong.
  */
 const KNOWN_TOOLS = [
-    { tool: "Codex", kinds: ["AGENTS"], path: "AGENTS.md", reads: "AGENTS.md" },
-    { tool: "Claude Code", kinds: ["CLAUDE"], path: "CLAUDE.md", reads: "CLAUDE.md" },
+    { tool: "Codex", kinds: ["AGENTS"], path: "AGENTS.md", reads: "AGENTS.md", folder: ".codex" },
+    { tool: "Claude Code", kinds: ["CLAUDE"], path: "CLAUDE.md", reads: "CLAUDE.md", folder: ".claude" },
     {
         tool: "Cursor",
         kinds: ["CURSOR_MDC", "CURSORRULES"],
         path: ".cursor/rules",
         reads: ".cursor/rules/*.mdc or .cursorrules",
+        folder: ".cursor",
     },
     {
         tool: "Copilot",
         kinds: ["COPILOT"],
         path: ".github/copilot-instructions.md",
         reads: ".github/copilot-instructions.md",
+        folder: ".github/instructions",
     },
-    { tool: "Gemini", kinds: ["GEMINI"], path: "GEMINI.md", reads: "GEMINI.md" },
+    { tool: "Gemini", kinds: ["GEMINI"], path: "GEMINI.md", reads: "GEMINI.md", folder: ".gemini" },
 ];
-function checkNoInstructionFile(files) {
+/**
+ * A missing file is a finding when the repository has no instruction file
+ * at all, or when the tool's own folder is there without it: in both the
+ * tool is in use and reads nothing. A repository that only uses Claude Code
+ * is not wrong for lacking a GEMINI.md, so the other tools are a note, not
+ * a finding, and never fail the check.
+ */
+function checkNoInstructionFile(root, files) {
     const present = new Set(files.map((f) => f.kind));
+    const hasAnyInstructionFile = files.some((f) => f.kind !== "SKILL");
     const findings = [];
-    for (const { tool, kinds, path, reads } of KNOWN_TOOLS) {
+    const noted = [];
+    for (const { tool, kinds, path, reads, folder } of KNOWN_TOOLS) {
         if (kinds.some((kind) => present.has(kind)))
             continue;
-        findings.push({
-            check: "no-file",
-            file: path,
-            line: 0,
-            sentence: `No instruction file: ${tool} reads ${reads}, and this repository has none at the head commit.`,
+        if (!hasAnyInstructionFile || dirExists(root, folder)) {
+            findings.push({
+                check: "no-file",
+                file: path,
+                line: 0,
+                sentence: `No instruction file: ${tool} reads ${reads}, and this repository has none at the head commit.`,
+            });
+        }
+        else {
+            noted.push(tool);
+        }
+    }
+    const notes = [];
+    if (noted.length > 0) {
+        const list = noted.length === 1 ? noted[0] : `${noted.slice(0, -1).join(", ")} and ${noted[noted.length - 1]}`;
+        notes.push({
+            sentence: `No instruction file for ${list}. Not a finding: nothing here says ${noted.length === 1 ? "it is" : "they are"} in use.`,
         });
     }
-    return findings;
+    return { findings, notes };
 }
 
 ;// CONCATENATED MODULE: ./src/discovery.ts
@@ -38517,11 +38572,12 @@ function parseFiles(files) {
 function run(options) {
     const files = discoverFiles(options.root, { extraPaths: options.extraPaths });
     const rules = parseFiles(files);
+    const noFile = checkNoInstructionFile(options.root, files);
     const findings = [
         ...checkDeadCommand(options.root, rules, options.extraAllowCommands),
         ...checkDeadPath(options.root, rules),
         ...checkNoCheckLine(rules),
-        ...checkNoInstructionFile(files),
+        ...noFile.findings,
         ...checkContradiction(rules),
     ];
     findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -38535,6 +38591,7 @@ function run(options) {
         ruleCount: rules.length,
         fileCount: files.length,
         inventory: buildInventory(files, rules),
+        notes: noFile.notes,
         conclusion: gating.length > 0 ? "failure" : "success",
     };
 }

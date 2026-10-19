@@ -12,11 +12,12 @@ export function run(options: RunOptions): RunResult {
   const files = discoverFiles(options.root, { extraPaths: options.extraPaths });
   const rules = parseFiles(files);
 
+  const noFile = checkNoInstructionFile(options.root, files);
   const findings: Finding[] = [
     ...checkDeadCommand(options.root, rules, options.extraAllowCommands),
     ...checkDeadPath(options.root, rules),
     ...checkNoCheckLine(rules),
-    ...checkNoInstructionFile(files),
+    ...noFile.findings,
     ...checkContradiction(rules),
   ];
 
@@ -34,6 +35,7 @@ export function run(options: RunOptions): RunResult {
     ruleCount: rules.length,
     fileCount: files.length,
     inventory: buildInventory(files, rules),
+    notes: noFile.notes,
     conclusion: gating.length > 0 ? "failure" : "success",
   };
 }

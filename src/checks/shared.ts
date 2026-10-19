@@ -1,3 +1,4 @@
+import { extractBacktickedCommands, extractCuedCommands } from "../scan.js";
 import type { ParsedRule } from "../types.js";
 
 export interface ScannableField {
@@ -15,7 +16,11 @@ export interface ScannableField {
 export interface BodyLine {
   text: string;
   line: number;
+  /** True inside a fenced block whose info string is a shell (or empty): every line is a command. */
+  shell: boolean;
 }
+
+const SHELL_FENCES = new Set(["", "sh", "bash", "shell", "zsh", "console", "shell-session"]);
 
 /**
  * The lines of a heading-block rule with their 1-based file line numbers,
@@ -25,7 +30,32 @@ export interface BodyLine {
  */
 export function headingBlockLines(rule: ParsedRule): BodyLine[] {
   if (rule.shape !== "heading") return [];
-  return rule.bodyText.split(/\r?\n/).map((text, i) => ({ text, line: rule.bodyStartLine + i }));
+  // A block never starts inside a fence: the parser ignores fenced headings.
+  let fence: string | undefined;
+  return rule.bodyText.split(/\r?\n/).map((text, i) => {
+    const delimiter = /^\s*(```|~~~)\s*([\w-]*)/.exec(text);
+    if (delimiter) {
+      fence = fence === undefined ? delimiter[2].toLowerCase() : undefined;
+      return { text, line: rule.bodyStartLine + i, shell: false };
+    }
+    return { text, line: rule.bodyStartLine + i, shell: fence !== undefined && SHELL_FENCES.has(fence) };
+  });
+}
+
+/**
+ * The commands a prose line states: its backticked spans, or, inside a
+ * shell fence, the line itself with a `$ ` prompt removed. Comments and
+ * blank lines in a fence are nothing.
+ */
+export function commandsIn({ text, shell }: BodyLine): string[] {
+  if (!shell) return extractBacktickedCommands(text);
+  const cmd = text.trim().replace(/^\$\s+/, "");
+  return cmd && !cmd.startsWith("#") ? [cmd] : [];
+}
+
+/** The commands a prose line says to run: everything in a shell fence, else only cued backticks. */
+export function cuedCommandsIn({ text, shell }: BodyLine): string[] {
+  return shell ? commandsIn({ text, shell, line: 0 }) : extractCuedCommands(text);
 }
 
 export function scannableFields(rule: ParsedRule): ScannableField[] {
