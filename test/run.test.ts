@@ -27,6 +27,9 @@ const ALL_FIXTURES = [
   "contradiction-version",
   "dead-script",
   "dead-path-prose",
+  "dead-command-prose",
+  "no-file",
+  "hertect-tools",
 ];
 
 describe("clean fixture", () => {
@@ -76,6 +79,33 @@ describe("check 1 — dead command", () => {
   it("does not treat every backticked word in a heading block as a command", () => {
     expect(byCheck(findingsFor("dead-path-prose"), "dead-command")).toEqual([]);
   });
+
+  it("fires when a heading-block sentence says to run a binary nothing defines", () => {
+    const findings = byCheck(findingsFor("dead-command-prose"), "dead-command").filter((f) => f.line === 5);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].lookedFor).toBe("buildit");
+    expect(findings[0].sentence).toBe(
+      "Dead command: `buildit` — no package.json script, Makefile target, or CI workflow binary named `buildit`.",
+    );
+  });
+
+  it("fires on a bare `pnpm <script>` whose script is not in package.json", () => {
+    const findings = byCheck(findingsFor("dead-command-prose"), "dead-command").filter((f) => f.line === 12);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].sentence).toBe("Dead command: `pnpm typecheck` — package.json has no script named `typecheck`.");
+  });
+
+  it("fires on a `make <target>` whose target is not in the Makefile", () => {
+    const findings = byCheck(findingsFor("dead-command-prose"), "dead-command").filter((f) => f.line === 13);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].lookedFor).toBe("deploy");
+    expect(findings[0].sentence).toBe("Dead command: `make deploy` — no Makefile target named `deploy`.");
+  });
+
+  it("stays silent on allowed tools, installed dependencies, existing scripts and targets, chained commands, paths, and uncued spans", () => {
+    const findings = byCheck(findingsFor("dead-command-prose"), "dead-command");
+    expect(findings.map((f) => f.lookedFor).sort()).toEqual(["buildit", "deploy", "typecheck"]);
+  });
 });
 
 describe("check 2 — dead path", () => {
@@ -89,13 +119,29 @@ describe("check 2 — dead path", () => {
     expect(byCheck(findingsFor("clean"), "dead-path")).toEqual([]);
   });
 
-  it("fires in a heading block only when the folder exists and the file does not", () => {
-    const findings = byCheck(findingsFor("dead-path-prose"), "dead-path");
+  it("fires in a heading block when the folder exists and the file does not", () => {
+    const findings = byCheck(findingsFor("dead-path-prose"), "dead-path").filter((f) => f.line === 5);
     expect(findings).toHaveLength(1);
     expect(findings[0].file).toBe("AGENTS.md");
-    expect(findings[0].line).toBe(5);
     expect(findings[0].lookedFor).toBe("scripts/rotate-keys.sh");
     expect(findings[0].sentence).toBe("Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`.");
+  });
+
+  it("fires in a heading block on a missing path, a missing bare file name, and an empty glob", () => {
+    const findings = byCheck(findingsFor("dead-path-prose"), "dead-path").filter((f) => f.line > 5);
+    expect(findings.map((f) => `${f.line}:${f.lookedFor}`)).toEqual([
+      "10:docs/runbook.md",
+      "10:CONTRIBUTING.md",
+      "11:src/**/*.test.ts",
+    ]);
+    expect(findings[0].sentence).toBe("Dead path: `docs/runbook.md` does not exist at the head commit.");
+    expect(findings[1].sentence).toBe("Dead path: `CONTRIBUTING.md` does not exist at the head commit.");
+    expect(findings[2].sentence).toBe("Dead path: `src/**/*.test.ts` matches no files at the head commit.");
+  });
+
+  it("leaves git refs, media types, framework names, dotfiles, nested files, root globs, branch globs, dot directories and node_modules alone in a heading block", () => {
+    const findings = byCheck(findingsFor("dead-path-prose"), "dead-path");
+    expect(findings).toHaveLength(4);
   });
 });
 
@@ -109,6 +155,34 @@ describe("check 3 — no Check line", () => {
 
   it("stays silent on the clean fixture", () => {
     expect(byCheck(findingsFor("clean"), "no-check")).toEqual([]);
+  });
+});
+
+describe("check 5 — no instruction file", () => {
+  it("fires once per known tool the repository has no file for", () => {
+    const findings = byCheck(findingsFor("no-file"), "no-file");
+    expect(findings.map((f) => f.file)).toEqual([
+      ".cursor/rules",
+      ".github/copilot-instructions.md",
+      "CLAUDE.md",
+      "GEMINI.md",
+    ]);
+    expect(findings.every((f) => f.line === 0)).toBe(true);
+    expect(findings[2].sentence).toBe(
+      "No instruction file: Claude Code reads CLAUDE.md, and this repository has none at the head commit.",
+    );
+  });
+
+  it("stays silent when every known tool has a file, in the clean and discovery-kinds fixtures", () => {
+    expect(byCheck(findingsFor("clean"), "no-file")).toEqual([]);
+    expect(byCheck(findingsFor("discovery-kinds"), "no-file")).toEqual([]);
+  });
+
+  it("is a finding, so fail-on all fails and dead-only does not", () => {
+    const all = run({ root: join(FIXTURES, "no-file"), extraPaths: [], failOn: "all", extraAllowCommands: [] });
+    expect(all.conclusion).toBe("failure");
+    const dead = run({ root: join(FIXTURES, "no-file"), extraPaths: [], failOn: "dead-only", extraAllowCommands: [] });
+    expect(dead.conclusion).toBe("success");
   });
 });
 
@@ -127,8 +201,16 @@ describe("check 4 — contradiction, narrow", () => {
     expect(findings.some((f) => f.file === ".github/copilot-instructions.md")).toBe(true);
   });
 
-  it("fires on the two contradiction fixtures only", () => {
-    const others = ALL_FIXTURES.filter((f) => !f.startsWith("contradiction"));
+  it("fires when two files state the deploy script two ways in prose", () => {
+    const findings = byCheck(findingsFor("hertect-tools"), "contradiction");
+    expect(findings.map((f) => `${f.file}:${f.line}`)).toEqual([".cursor/rules/deploy.mdc:6", "AGENTS.md:12"]);
+    expect(findings[1].sentence).toBe(
+      "Contradiction: the deploy command here is `npm run deploy:staging`, but `npm run deploy` (.cursor/rules/deploy.mdc) says otherwise.",
+    );
+  });
+
+  it("fires on the two contradiction fixtures and the hertect-tools fixture only", () => {
+    const others = ALL_FIXTURES.filter((f) => !f.startsWith("contradiction") && f !== "hertect-tools");
     for (const fixture of others) {
       expect(byCheck(findingsFor(fixture), "contradiction"), fixture).toEqual([]);
     }
@@ -177,5 +259,29 @@ describe("allow-commands input", () => {
       extraAllowCommands: ["verify-instructions-for-real"],
     });
     expect(byCheck(result.findings, "dead-command")).toEqual([]);
+  });
+});
+
+// hertect-tools is a copy of Hertect-Consulting/hertect-tools, the dogfood
+// repository built to carry a moved script, a removed npm script, and a deploy
+// command stated two ways. Before these checks it reported two "no Check line"
+// findings and nothing else.
+describe("the hertect-tools dogfood fixture", () => {
+  it("reports the moved script, the removed scripts, the deploy disagreement, and the missing files", () => {
+    const findings = findingsFor("hertect-tools");
+    const summary = findings.map((f) => `${f.check} ${f.file}:${f.line}${f.lookedFor ? ` ${f.lookedFor}` : ""}`);
+    expect(summary).toEqual([
+      "dead-command .cursor/rules/deploy.mdc:6 deploy",
+      "dead-command .cursor/rules/deploy.mdc:6 deploy:staging",
+      "contradiction .cursor/rules/deploy.mdc:6",
+      "no-file .github/copilot-instructions.md:0",
+      "dead-path AGENTS.md:10 scripts/rotate-keys.sh",
+      "dead-command AGENTS.md:11 lint",
+      "dead-command AGENTS.md:12 deploy:staging",
+      "contradiction AGENTS.md:12",
+      "no-check AGENTS.md:14",
+      "no-check AGENTS.md:19",
+      "no-file GEMINI.md:0",
+    ]);
   });
 });

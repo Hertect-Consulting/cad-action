@@ -19,8 +19,9 @@ export interface BodyLine {
 
 /**
  * The lines of a heading-block rule with their 1-based file line numbers,
- * for the two narrow prose scans (package.json scripts, moved files).
- * Empty for every other shape, whose fields come from scannableFields.
+ * for the prose scans (scripts and targets, commands a sentence says to
+ * run, paths, and the commands the contradiction check compares). Empty
+ * for every other shape, whose fields come from scannableFields.
  */
 export function headingBlockLines(rule: ParsedRule): BodyLine[] {
   if (rule.shape !== "heading") return [];

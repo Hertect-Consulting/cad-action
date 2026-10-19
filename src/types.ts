@@ -38,11 +38,12 @@ export interface ParsedRule {
   bodyStartLine: number;
 }
 
-export type CheckId = "dead-command" | "dead-path" | "no-check" | "contradiction";
+export type CheckId = "dead-command" | "dead-path" | "no-check" | "no-file" | "contradiction";
 
 export interface Finding {
   check: CheckId;
   file: string;
+  /** 1-based; 0 when the finding is about a file that does not exist. */
   line: number;
   sentence: string;
   lookedFor?: string;

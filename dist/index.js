@@ -37179,11 +37179,12 @@ function getOctokit(token, options, ...additionalPlugins) {
 //# sourceMappingURL=github.js.map
 ;// CONCATENATED MODULE: ./src/comment.ts
 const COMMENT_MARKER = "<!-- ctrl-alt-delegate-action:sticky-comment -->";
-const CHECK_ORDER = ["dead-command", "dead-path", "no-check", "contradiction"];
+const CHECK_ORDER = ["dead-command", "dead-path", "no-check", "no-file", "contradiction"];
 const CHECK_LABEL = {
     "dead-command": "Dead command",
     "dead-path": "Dead path",
     "no-check": "No Check line",
+    "no-file": "No instruction file",
     contradiction: "Contradiction",
 };
 const TAGLINE = "Receipts for one repo. Ctrl Alt Delegate keeps them for all of yours.";
@@ -37239,7 +37240,8 @@ function plural(count, noun) {
 }
 function formatFindingLine(f) {
     const lookedFor = f.lookedFor ? ` — looked for \`${f.lookedFor}\`` : "";
-    return `- \`${f.file}:${f.line}\` — ${f.sentence}${lookedFor}`;
+    const where = f.line > 0 ? `${f.file}:${f.line}` : f.file;
+    return `- \`${where}\` — ${f.sentence}${lookedFor}`;
 }
 
 ;// CONCATENATED MODULE: ./src/scan.ts
@@ -37257,14 +37259,127 @@ function extractBacktickedCommands(text) {
     }
     return out;
 }
+/**
+ * The words that, right before a backtick, say the span is something to run:
+ * "run `buildit` first", "via `make deploy`". A backticked span in prose
+ * without one of these is a name, a flag, a header, a branch — not a command
+ * — and is left to the path scan.
+ */
+const COMMAND_CUES = new Set([
+    "run",
+    "runs",
+    "running",
+    "ran",
+    "rerun",
+    "re-run",
+    "execute",
+    "executes",
+    "executing",
+    "invoke",
+    "invokes",
+    "call",
+    "calls",
+    "via",
+    "command",
+]);
+/**
+ * Backticked spans that prose presents as commands: the word before the
+ * opening backtick is one of the cues above. "Run `npm run lint`" yields
+ * ["npm run lint"]; "Branch from `origin/main`" yields nothing.
+ */
+function extractCuedCommands(text) {
+    if (!text)
+        return [];
+    const out = [];
+    const re = /`([^`]+)`/g;
+    let m;
+    while ((m = re.exec(text))) {
+        const before = text.slice(0, m.index).replace(/[\s:,("']+$/, "");
+        const cue = /([A-Za-z-]+)$/.exec(before)?.[1].toLowerCase();
+        const cmd = m[1].trim().replace(/^\$\s+/, "");
+        if (cue && COMMAND_CUES.has(cue) && cmd)
+            out.push(cmd);
+    }
+    return out;
+}
+/** Splits a chained shell line on `&&`, `||`, `;` and `|`, so each command is judged on its own. */
+function shellSegments(command) {
+    return command
+        .split(/\s*(?:&&|\|\||;|\|)\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
 function firstToken(command) {
     return command.trim().split(/\s+/)[0] ?? "";
 }
+/** Subcommands pnpm and yarn own themselves. `pnpm install` is not a script; `pnpm build` is. */
+const PACKAGE_MANAGER_SUBCOMMANDS = new Set([
+    "add",
+    "audit",
+    "bin",
+    "cache",
+    "config",
+    "create",
+    "dedupe",
+    "deploy",
+    "dlx",
+    "doctor",
+    "env",
+    "exec",
+    "fetch",
+    "global",
+    "help",
+    "i",
+    "import",
+    "info",
+    "init",
+    "install",
+    "licenses",
+    "link",
+    "list",
+    "login",
+    "logout",
+    "ls",
+    "outdated",
+    "owner",
+    "pack",
+    "patch",
+    "patch-commit",
+    "patch-remove",
+    "plugin",
+    "prune",
+    "publish",
+    "rb",
+    "rebuild",
+    "remove",
+    "rm",
+    "root",
+    "search",
+    "self-update",
+    "set",
+    "setup",
+    "store",
+    "tag",
+    "team",
+    "un",
+    "uninstall",
+    "unlink",
+    "up",
+    "update",
+    "upgrade",
+    "upgrade-interactive",
+    "version",
+    "versions",
+    "why",
+    "workspace",
+    "workspaces",
+]);
 /**
  * If `command` invokes a package.json script, returns the script name;
  * otherwise null. Recognises `npm run X`, `npm run-script X`, `npm test`,
- * `npm start`, `pnpm run X`, and `yarn run X`. The bare `pnpm X` / `yarn X`
- * forms are left alone on purpose: `yarn install` is not a script.
+ * `npm start`, `npm stop`, `npm restart`, `pnpm run X`, `yarn run X`, and
+ * the bare `pnpm X` / `yarn X` forms when X is not a subcommand the package
+ * manager owns itself: `yarn build` is a script, `yarn install` is not.
  */
 function packageScriptInvocation(command) {
     const parts = command.trim().split(/\s+/);
@@ -37272,12 +37387,32 @@ function packageScriptInvocation(command) {
     if (!tool || !sub)
         return null;
     const t = tool.replace(/^\.\//, "").toLowerCase();
-    if (t === "npm" && (sub === "test" || sub === "start"))
+    if (t === "npm" && (sub === "test" || sub === "start" || sub === "stop" || sub === "restart"))
         return sub;
     if ((t === "npm" || t === "pnpm" || t === "yarn") && (sub === "run" || sub === "run-script")) {
         if (!name || name.startsWith("-"))
             return null;
         return name;
+    }
+    if ((t === "pnpm" || t === "yarn") && !sub.startsWith("-") && !PACKAGE_MANAGER_SUBCOMMANDS.has(sub)) {
+        return sub;
+    }
+    return null;
+}
+/**
+ * If `command` invokes a Makefile target, returns the target name; otherwise
+ * null. Flags (`-j4`, `--silent`) and variable assignments (`ENV=prod`) are
+ * skipped; `make` on its own runs the default target and is not judged.
+ */
+function makeTargetInvocation(command) {
+    const parts = command.trim().split(/\s+/);
+    const tool = parts[0]?.replace(/^\.\//, "").toLowerCase();
+    if (tool !== "make")
+        return null;
+    for (const part of parts.slice(1)) {
+        if (part.startsWith("-") || part.includes("="))
+            continue;
+        return part;
     }
     return null;
 }
@@ -37323,8 +37458,9 @@ function extractPathLikeTokens(text) {
 ;// CONCATENATED MODULE: ./src/checks/shared.ts
 /**
  * The lines of a heading-block rule with their 1-based file line numbers,
- * for the two narrow prose scans (package.json scripts, moved files).
- * Empty for every other shape, whose fields come from scannableFields.
+ * for the prose scans (scripts and targets, commands a sentence says to
+ * run, paths, and the commands the contradiction check compares). Empty
+ * for every other shape, whose fields come from scannableFields.
  */
 function headingBlockLines(rule) {
     if (rule.shape !== "heading")
@@ -37354,24 +37490,39 @@ const FAMILIES = [
     { key: "lint", re: /\blint\b/i },
     { key: "build", re: /\bbuild\b/i },
     { key: "typecheck", re: /\btypecheck\b|\btype-check\b|\btsc\b/i },
+    { key: "deploy", re: /\bdeploy\b/i },
 ];
 function familyOf(command) {
     return FAMILIES.find((f) => f.re.test(command))?.key;
 }
 function checkCommandContradictions(rules) {
     const byFamily = new Map();
+    const add = (entry) => {
+        const family = familyOf(entry.command);
+        if (!family)
+            return;
+        const list = byFamily.get(family) ?? [];
+        list.push(entry);
+        byFamily.set(family, list);
+    };
     for (const rule of rules) {
+        // In prose only a package.json script or a Makefile target counts, the
+        // two forms a sentence states exactly. `npm run deploy` in one file and
+        // `npm run deploy:staging` in another is the disagreement this is for.
+        for (const { text, line } of headingBlockLines(rule)) {
+            for (const cmd of extractBacktickedCommands(text)) {
+                for (const part of shellSegments(cmd)) {
+                    if (!packageScriptInvocation(part) && !makeTargetInvocation(part))
+                        continue;
+                    add({ file: rule.file, line, command: part.replace(/\s+/g, " "), noun: "command" });
+                }
+            }
+        }
         for (const field of scannableFields(rule)) {
             if (field.field !== "check")
                 continue;
             for (const cmd of extractBacktickedCommands(field.text)) {
-                const family = familyOf(cmd);
-                if (!family)
-                    continue;
-                const normalized = cmd.trim().replace(/\s+/g, " ");
-                const list = byFamily.get(family) ?? [];
-                list.push({ file: rule.file, line: field.line, command: normalized });
-                byFamily.set(family, list);
+                add({ file: rule.file, line: field.line, command: cmd.trim().replace(/\s+/g, " "), noun: "Check" });
             }
         }
     }
@@ -37386,7 +37537,7 @@ function checkCommandContradictions(rules) {
                 check: "contradiction",
                 file: entry.file,
                 line: entry.line,
-                sentence: `Contradiction: the ${family} Check here is \`${entry.command}\`, but ${others} says otherwise.`,
+                sentence: `Contradiction: the ${family} ${entry.noun} here is \`${entry.command}\`, but ${others} says otherwise.`,
             });
         }
     }
@@ -37451,6 +37602,31 @@ const COMMON_TOOLS = new Set([
     "python3",
     "pip",
     "pip3",
+    "bun",
+    "deno",
+    "uv",
+    "sh",
+    "bash",
+    "zsh",
+    "docker",
+    "kubectl",
+    "gh",
+    "sudo",
+    "ls",
+    "cat",
+    "cp",
+    "mv",
+    "rm",
+    "mkdir",
+    "touch",
+    "chmod",
+    "grep",
+    "sed",
+    "awk",
+    "find",
+    "curl",
+    "wget",
+    "tar",
 ]);
 const SHELL_BUILTINS = new Set([
     "cd",
@@ -37533,19 +37709,51 @@ function fileExists(root, relPath) {
         return false;
     }
 }
+/** True for a directory at `relPath`, including ones `listFiles` does not walk (dot directories, `lib/`). */
+function dirExists(root, relPath) {
+    try {
+        return (0,external_node_fs_namespaceObject.statSync)((0,external_node_path_namespaceObject.join)(root, relPath)).isDirectory();
+    }
+    catch {
+        return false;
+    }
+}
 
 ;// CONCATENATED MODULE: ./src/definitions.ts
 
-function readPackageScripts(root) {
+function readPackageJson(root) {
     if (!fileExists(root, "package.json"))
-        return new Set();
+        return {};
     try {
-        const pkg = JSON.parse(readRepoFile(root, "package.json"));
-        return new Set(Object.keys(pkg.scripts ?? {}));
+        return JSON.parse(readRepoFile(root, "package.json"));
     }
     catch {
-        return new Set();
+        return {};
     }
+}
+function readPackageScripts(pkg) {
+    return new Set(Object.keys(pkg.scripts ?? {}));
+}
+/**
+ * Every package.json in the repository counts, not only the root one: in a
+ * workspace the binary a rule names is usually installed by one package.
+ */
+function readPackageDependencies(root) {
+    const names = new Set();
+    const manifests = listFiles(root).filter((p) => p === "package.json" || p.endsWith("/package.json"));
+    for (const path of manifests) {
+        let pkg;
+        try {
+            pkg = JSON.parse(readRepoFile(root, path));
+        }
+        catch {
+            continue;
+        }
+        for (const name of [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]) {
+            names.add(name);
+        }
+    }
+    return names;
 }
 function readMakeTargets(root) {
     const targets = new Set();
@@ -37573,13 +37781,16 @@ function readCiWorkflowText(root) {
 }
 function loadDefinedCommands(root) {
     return {
-        packageScripts: readPackageScripts(root),
+        packageScripts: readPackageScripts(readPackageJson(root)),
+        packageDependencies: readPackageDependencies(root),
         makeTargets: readMakeTargets(root),
         ciWorkflowText: readCiWorkflowText(root),
     };
 }
 function definitions_isDefined(token, defs) {
     if (defs.packageScripts.has(token))
+        return true;
+    if (defs.packageDependencies.has(token))
         return true;
     if (defs.makeTargets.has(token))
         return true;
@@ -37593,54 +37804,93 @@ function definitions_isDefined(token, defs) {
 
 
 /**
- * A backticked `npm run X` (or npm test/start, pnpm run, yarn run) whose
- * script is not in package.json. Precise enough to run on prose too: the
- * probe over three real repos found two true hits and no false ones.
+ * A backticked `npm run X` (or npm test/start, pnpm X, yarn X) whose script
+ * is not in package.json, or a `make X` whose target is not in the Makefile.
+ * The tool itself stays on the allow list; it is the argument that is
+ * judged. Precise enough to run on prose too: the probe over three real
+ * repos found two true hits and no false ones.
  */
 function deadScriptFinding(rule, text, line, defs) {
     const out = [];
     for (const cmd of extractBacktickedCommands(text)) {
-        const script = packageScriptInvocation(cmd);
-        if (!script || defs.packageScripts.has(script))
-            continue;
-        out.push({
-            check: "dead-command",
-            file: rule.file,
-            line,
-            sentence: `Dead command: \`${cmd}\` — package.json has no script named \`${script}\`.`,
-            lookedFor: script,
-        });
+        for (const part of shellSegments(cmd)) {
+            const script = packageScriptInvocation(part);
+            if (script && !defs.packageScripts.has(script)) {
+                out.push({
+                    check: "dead-command",
+                    file: rule.file,
+                    line,
+                    sentence: `Dead command: \`${part}\` — package.json has no script named \`${script}\`.`,
+                    lookedFor: script,
+                });
+            }
+            const target = makeTargetInvocation(part);
+            if (target && !defs.makeTargets.has(target)) {
+                out.push({
+                    check: "dead-command",
+                    file: rule.file,
+                    line,
+                    sentence: `Dead command: \`${part}\` — no Makefile target named \`${target}\`.`,
+                    lookedFor: target,
+                });
+            }
+        }
     }
     return out;
 }
+/** A command candidate after the script and target forms have been judged on their own. */
+function isPlainCommand(part) {
+    return !packageScriptInvocation(part) && !makeTargetInvocation(part);
+}
+function deadBinaryFinding(rule, cmd, line, defs, extraAllow) {
+    const token = firstToken(cmd);
+    if (!token)
+        return undefined;
+    if (isAllowedFirstToken(token, extraAllow))
+        return undefined;
+    if (definitions_isDefined(token, defs))
+        return undefined;
+    return {
+        check: "dead-command",
+        file: rule.file,
+        line,
+        sentence: `Dead command: \`${cmd}\` — no package.json script, Makefile target, or CI workflow binary named \`${token}\`.`,
+        lookedFor: token,
+    };
+}
+/**
+ * A prose command is judged only when the sentence presents it as one
+ * ("run `buildit`") and its first word is shaped like a binary: lower-case,
+ * no slash, no colon. `Accept: application/json` and `X-Frame-Options` are
+ * backticked in real instruction files and are not commands.
+ */
+const BINARY_NAME_RE = /^[a-z][a-z0-9_.-]*$/;
 function checkDeadCommand(root, rules, extraAllow) {
     const defs = loadDefinedCommands(root);
     const findings = [];
     for (const rule of rules) {
         for (const { text, line } of headingBlockLines(rule)) {
             findings.push(...deadScriptFinding(rule, text, line, defs));
+            for (const cmd of extractCuedCommands(text)) {
+                for (const part of shellSegments(cmd)) {
+                    if (!isPlainCommand(part) || !BINARY_NAME_RE.test(firstToken(part)))
+                        continue;
+                    const finding = deadBinaryFinding(rule, part, line, defs, extraAllow);
+                    if (finding)
+                        findings.push(finding);
+                }
+            }
         }
         for (const field of scannableFields(rule)) {
             if (field.field === "appliesTo")
                 continue; // spec: "a Check or What line"
             findings.push(...deadScriptFinding(rule, field.text, field.line, defs));
             for (const cmd of extractBacktickedCommands(field.text)) {
-                if (packageScriptInvocation(cmd))
+                if (!isPlainCommand(cmd))
                     continue; // already judged above
-                const token = firstToken(cmd);
-                if (!token)
-                    continue;
-                if (isAllowedFirstToken(token, extraAllow))
-                    continue;
-                if (definitions_isDefined(token, defs))
-                    continue;
-                findings.push({
-                    check: "dead-command",
-                    file: rule.file,
-                    line: field.line,
-                    sentence: `Dead command: \`${cmd}\` — no package.json script, Makefile target, or CI workflow binary named \`${token}\`.`,
-                    lookedFor: token,
-                });
+                const finding = deadBinaryFinding(rule, cmd, field.line, defs, extraAllow);
+                if (finding)
+                    findings.push(finding);
             }
         }
     }
@@ -37701,18 +37951,99 @@ function globExpand(pattern, allPaths) {
 
 
 /**
- * The prose case worth flagging: a backticked file path whose first folder
- * is real. `scripts/rotate-keys.sh` after the script moved, not `origin/main`
- * or `application/json`. Requires a slash, no glob, and a file extension.
+ * First segments that look like a folder in prose but are not one: git
+ * remotes and refs, media types, hosts. `origin/main` and
+ * `application/json` are backticked in real instruction files.
  */
-function isFileInsideExistingFolder(token, allFiles) {
-    const slash = token.indexOf("/");
-    if (slash <= 0 || token.includes("*"))
-        return false;
-    if (!/\.[A-Za-z0-9]{1,8}$/.test(token))
-        return false;
-    const folder = token.slice(0, slash + 1);
-    return allFiles.some((f) => f.startsWith(folder));
+const NOT_A_FOLDER = new Set([
+    "origin",
+    "upstream",
+    "refs",
+    "head",
+    "application",
+    "text",
+    "image",
+    "audio",
+    "video",
+    "font",
+    "multipart",
+    "message",
+    "model",
+    "github.com",
+    "gitlab.com",
+    "bitbucket.org",
+    "localhost",
+]);
+/** Folders that are never committed, so a path under them is not held to the head commit. */
+const NOT_COMMITTED = new Set(["node_modules", "dist", "build", "coverage"]);
+/**
+ * Extensions a bare file name in prose is held to. Code extensions stay
+ * out: `Node.js`, `three.js` and an illustrative `foo.ts` are names, not
+ * paths, far more often than they are stale mentions.
+ */
+const BARE_NAME_EXTENSIONS = new Set([
+    "md",
+    "mdc",
+    "mdx",
+    "txt",
+    "json",
+    "yml",
+    "yaml",
+    "toml",
+    "ini",
+    "cfg",
+    "sh",
+    "sql",
+    "csv",
+    "lock",
+]);
+/**
+ * What a backticked token in prose claims to be, or undefined when it is
+ * not held to the head commit. A slash with an extension is a file path; a
+ * slash with a glob is a glob when it names files (`src/**` or `*.ts`),
+ * not branches (`design/*`); a bare name with a document-like extension is
+ * a file somewhere in the repository. Existence is checked on disk, not in
+ * the walked listing, which skips dot directories and `lib/`.
+ * `scripts/rotate-keys.sh` after the script moved is the case this exists for.
+ */
+function classifyProsePath(root, token, allFiles) {
+    const path = token.replace(/^\.\//, "");
+    const slash = path.indexOf("/");
+    const hasGlob = path.includes("*");
+    const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(path);
+    if (slash > 0) {
+        const folder = path.slice(0, slash);
+        if (NOT_A_FOLDER.has(folder.toLowerCase()) || NOT_COMMITTED.has(folder))
+            return undefined;
+        if (hasGlob) {
+            const namesFiles = path.includes("**") || /\.[A-Za-z0-9*]+$/.test(path.split("/").pop() ?? "");
+            if (!namesFiles || folder.startsWith("."))
+                return undefined;
+            return globExpand(path, allFiles).length === 0 ? { kind: "glob" } : undefined;
+        }
+        if (!hasExtension || fileExists(root, path))
+            return undefined;
+        if (dirExists(root, folder)) {
+            return { kind: "in-folder", folder: folder + "/", rest: path.slice(slash + 1) };
+        }
+        return { kind: "missing" };
+    }
+    if (slash === 0 || hasGlob || path.startsWith("."))
+        return undefined;
+    const ext = /\.([A-Za-z0-9]{1,8})$/.exec(path)?.[1].toLowerCase();
+    if (!ext || !BARE_NAME_EXTENSIONS.has(ext))
+        return undefined;
+    if (allFiles.some((f) => f === path || f.endsWith("/" + path)))
+        return undefined;
+    return { kind: "missing" };
+}
+function proseSentence(token, claim) {
+    if (claim.kind === "glob")
+        return `Dead path: \`${token}\` matches no files at the head commit.`;
+    if (claim.kind === "in-folder") {
+        return `Dead path: \`${token}\` — \`${claim.folder}\` exists but has no \`${claim.rest}\`.`;
+    }
+    return `Dead path: \`${token}\` does not exist at the head commit.`;
 }
 function checkDeadPath(root, rules) {
     const allFiles = listFiles(root);
@@ -37722,18 +38053,18 @@ function checkDeadPath(root, rules) {
         for (const { text, line } of headingBlockLines(rule)) {
             for (const span of extractBacktickedCommands(text)) {
                 for (const token of extractPathLikeTokens(span)) {
-                    if (!isFileInsideExistingFolder(token, allFiles))
+                    const claim = classifyProsePath(root, token, allFiles);
+                    if (!claim)
                         continue;
                     const key = `${rule.file}:${line}:${token}`;
-                    if (seen.has(key) || fileExists(root, token))
+                    if (seen.has(key))
                         continue;
                     seen.add(key);
-                    const slash = token.indexOf("/");
                     findings.push({
                         check: "dead-path",
                         file: rule.file,
                         line,
-                        sentence: `Dead path: \`${token}\` — \`${token.slice(0, slash + 1)}\` exists but has no \`${token.slice(slash + 1)}\`.`,
+                        sentence: proseSentence(token, claim),
                         lookedFor: token,
                     });
                 }
@@ -37799,6 +38130,46 @@ function checkNoCheckLine(rules) {
                 sentence: `No Check line: "${rule.title}" has an empty or missing Check.`,
             });
         }
+    }
+    return findings;
+}
+
+;// CONCATENATED MODULE: ./src/checks/noFile.ts
+/**
+ * The tools the Action knows, and the file each one reads. A SKILL.md is
+ * shared between tools and counts for none of them. A repository with no
+ * file for a tool gives that tool nothing to follow, which is the quietest
+ * way an instruction layer can be wrong.
+ */
+const KNOWN_TOOLS = [
+    { tool: "Codex", kinds: ["AGENTS"], path: "AGENTS.md", reads: "AGENTS.md" },
+    { tool: "Claude Code", kinds: ["CLAUDE"], path: "CLAUDE.md", reads: "CLAUDE.md" },
+    {
+        tool: "Cursor",
+        kinds: ["CURSOR_MDC", "CURSORRULES"],
+        path: ".cursor/rules",
+        reads: ".cursor/rules/*.mdc or .cursorrules",
+    },
+    {
+        tool: "Copilot",
+        kinds: ["COPILOT"],
+        path: ".github/copilot-instructions.md",
+        reads: ".github/copilot-instructions.md",
+    },
+    { tool: "Gemini", kinds: ["GEMINI"], path: "GEMINI.md", reads: "GEMINI.md" },
+];
+function checkNoInstructionFile(files) {
+    const present = new Set(files.map((f) => f.kind));
+    const findings = [];
+    for (const { tool, kinds, path, reads } of KNOWN_TOOLS) {
+        if (kinds.some((kind) => present.has(kind)))
+            continue;
+        findings.push({
+            check: "no-file",
+            file: path,
+            line: 0,
+            sentence: `No instruction file: ${tool} reads ${reads}, and this repository has none at the head commit.`,
+        });
     }
     return findings;
 }
@@ -38015,6 +38386,43 @@ function findSection(lines, fenced, headings, headingText) {
     const firstNonEmpty = body.find((b) => b.text.trim().length > 0);
     return { text, startLine: firstNonEmpty?.lineNo ?? h.line };
 }
+/** The 0-based index of the line after a leading `---` frontmatter block, or 0 when there is none. */
+function frontmatterEnd(lines) {
+    if (lines[0]?.trim() !== "---")
+        return 0;
+    for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim() === "---")
+            return i + 1;
+    }
+    return 0;
+}
+/**
+ * The prose before the first `## ` heading of a heading-block file, as one
+ * rule of its own. A short CLAUDE.md, a Cursor rule, or an AGENTS.md whose
+ * first paragraph carries the real instructions has no `## ` heading at
+ * all, and until now parsed to nothing, so no check ever read it. The
+ * title is the `# ` heading when there is one, else the file's name.
+ * Frontmatter lines are blanked rather than dropped so line numbers hold.
+ */
+function parsePreamble(file, lines, headings) {
+    const start = frontmatterEnd(lines);
+    const end = headings[0] ? headings[0].line - 1 : lines.length;
+    const body = lines.slice(0, end).map((text, i) => (i < start ? "" : text));
+    const titleIdx = body.findIndex((text) => /^#\s+\S/.test(text));
+    const hasProse = body.some((text, i) => i !== titleIdx && text.trim().length > 0);
+    if (!hasProse)
+        return undefined;
+    const title = titleIdx >= 0 ? body[titleIdx].replace(/^#\s+/, "").trim() : (file.path.split("/").pop() ?? file.path);
+    return {
+        file: file.path,
+        kind: file.kind,
+        shape: "heading",
+        title,
+        titleLine: titleIdx >= 0 ? titleIdx + 1 : 1,
+        bodyText: body.join("\n"),
+        bodyStartLine: 1,
+    };
+}
 function parseFile(file) {
     const lines = file.content.split(/\r?\n/);
     const fenced = computeFenceMask(lines);
@@ -38043,6 +38451,11 @@ function parseFile(file) {
     const usesFiveLineShape = ruleHeadings.length > 0;
     const blockHeadings = usesFiveLineShape ? ruleHeadings : headings;
     const rules = [];
+    if (!usesFiveLineShape) {
+        const preamble = parsePreamble(file, lines, headings);
+        if (preamble)
+            rules.push(preamble);
+    }
     blockHeadings.forEach((h) => {
         const allHeadingsIdx = headings.indexOf(h);
         const nextLine = headings[allHeadingsIdx + 1]?.line ?? lines.length + 1;
@@ -38100,6 +38513,7 @@ function parseFiles(files) {
 
 
 
+
 function run(options) {
     const files = discoverFiles(options.root, { extraPaths: options.extraPaths });
     const rules = parseFiles(files);
@@ -38107,6 +38521,7 @@ function run(options) {
         ...checkDeadCommand(options.root, rules, options.extraAllowCommands),
         ...checkDeadPath(options.root, rules),
         ...checkNoCheckLine(rules),
+        ...checkNoInstructionFile(files),
         ...checkContradiction(rules),
     ];
     findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);

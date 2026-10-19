@@ -2,6 +2,7 @@ import { checkContradiction } from "./checks/contradiction.js";
 import { checkDeadCommand } from "./checks/deadCommand.js";
 import { checkDeadPath } from "./checks/deadPath.js";
 import { checkNoCheckLine } from "./checks/noCheck.js";
+import { checkNoInstructionFile } from "./checks/noFile.js";
 import { discoverFiles } from "./discovery.js";
 import { buildInventory } from "./inventory.js";
 import { parseFiles } from "./parser.js";
@@ -15,6 +16,7 @@ export function run(options: RunOptions): RunResult {
     ...checkDeadCommand(options.root, rules, options.extraAllowCommands),
     ...checkDeadPath(options.root, rules),
     ...checkNoCheckLine(rules),
+    ...checkNoInstructionFile(files),
     ...checkContradiction(rules),
   ];
 

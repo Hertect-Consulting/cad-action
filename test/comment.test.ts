@@ -128,4 +128,25 @@ describe("buildComment", () => {
     expect(body).toContain("No instruction or skill files found in this repository.");
     expect(body).not.toContain("name an owner");
   });
+
+  it("names the file alone, with no line, for a finding about a file that does not exist", () => {
+    const result: RunResult = {
+      ruleCount: 1,
+      fileCount: 1,
+      inventory: inventory({ ruleCount: 1 }),
+      conclusion: "failure",
+      findings: [
+        {
+          check: "no-file",
+          file: "CLAUDE.md",
+          line: 0,
+          sentence: "No instruction file: Claude Code reads CLAUDE.md, and this repository has none at the head commit.",
+        },
+      ],
+    };
+    const body = buildComment(result);
+    expect(body).toContain("### No instruction file (1)");
+    expect(body).toContain("- `CLAUDE.md` — No instruction file:");
+    expect(body).not.toContain("CLAUDE.md:0");
+  });
 });
