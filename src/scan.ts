@@ -130,14 +130,59 @@ const PACKAGE_MANAGER_SUBCOMMANDS = new Set([
 ]);
 
 /**
+ * Removes a workspace selector from a package-manager command and says
+ * whether one was there: `pnpm --filter web test` and `npm run test -w web`
+ * run a script of one workspace package, `yarn workspace web test` likewise.
+ * The selector decides which package.json the script is looked up in.
+ */
+function stripWorkspaceSelector(parts: string[]): { parts: string[]; scoped: boolean } {
+  const tool = parts[0]?.replace(/^\.\//, "").toLowerCase();
+  let scoped = false;
+  const out: string[] = [parts[0]];
+  if (tool === "yarn" && parts[1] === "workspace" && parts[2]) {
+    return { parts: [parts[0], ...parts.slice(3)], scoped: true };
+  }
+  for (let i = 1; i < parts.length; i++) {
+    const p = parts[i];
+    if (tool === "pnpm" && (p === "--filter" || p === "-F" || p === "--filter-prod")) {
+      scoped = true;
+      i++;
+      continue;
+    }
+    if (tool === "pnpm" && (p.startsWith("--filter=") || p === "-r" || p === "--recursive" || p === "-w")) {
+      scoped = true;
+      continue;
+    }
+    if (tool === "npm" && (p === "-w" || p === "--workspace")) {
+      scoped = true;
+      i++;
+      continue;
+    }
+    if (tool === "npm" && (p.startsWith("--workspace=") || p === "-ws" || p === "--workspaces")) {
+      scoped = true;
+      continue;
+    }
+    out.push(p);
+  }
+  return { parts: out, scoped };
+}
+
+/** True when `command` runs a script in a workspace package rather than the root package.json. */
+export function isWorkspaceScoped(command: string): boolean {
+  return stripWorkspaceSelector(command.trim().split(/\s+/)).scoped;
+}
+
+/**
  * If `command` invokes a package.json script, returns the script name;
  * otherwise null. Recognises `npm run X`, `npm run-script X`, `npm test`,
  * `npm start`, `npm stop`, `npm restart`, `pnpm run X`, `yarn run X`, and
  * the bare `pnpm X` / `yarn X` forms when X is not a subcommand the package
  * manager owns itself: `yarn build` is a script, `yarn install` is not.
+ * A workspace selector (`--filter`, `-w`, `yarn workspace`) is skipped over;
+ * see isWorkspaceScoped for which package.json then applies.
  */
 export function packageScriptInvocation(command: string): string | null {
-  const parts = command.trim().split(/\s+/);
+  const { parts } = stripWorkspaceSelector(command.trim().split(/\s+/));
   const [tool, sub, name] = parts;
   if (!tool || !sub) return null;
   const t = tool.replace(/^\.\//, "").toLowerCase();

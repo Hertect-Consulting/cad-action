@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractCuedCommands, makeTargetInvocation, packageScriptInvocation, shellSegments } from "../src/scan.js";
+import { extractCuedCommands, isWorkspaceScoped, makeTargetInvocation, packageScriptInvocation, shellSegments } from "../src/scan.js";
 
 describe("packageScriptInvocation", () => {
   it("returns the script for the run forms and the npm lifecycle shortcuts", () => {
@@ -26,6 +26,26 @@ describe("packageScriptInvocation", () => {
     expect(packageScriptInvocation("npm run")).toBeNull();
     expect(packageScriptInvocation("npx vitest")).toBeNull();
     expect(packageScriptInvocation("make build")).toBeNull();
+  });
+});
+
+describe("workspace-scoped scripts", () => {
+  it("skips the selector and returns the script", () => {
+    expect(packageScriptInvocation("pnpm --filter web test")).toBe("test");
+    expect(packageScriptInvocation("pnpm -F web run build")).toBe("build");
+    expect(packageScriptInvocation("pnpm --filter=web lint")).toBe("lint");
+    expect(packageScriptInvocation("npm run test -w apps/web")).toBe("test");
+    expect(packageScriptInvocation("npm run test --workspace=apps/web")).toBe("test");
+    expect(packageScriptInvocation("yarn workspace web build")).toBe("build");
+  });
+
+  it("knows which commands name a workspace", () => {
+    expect(isWorkspaceScoped("pnpm --filter web test")).toBe(true);
+    expect(isWorkspaceScoped("npm run test -w web")).toBe(true);
+    expect(isWorkspaceScoped("yarn workspace web build")).toBe(true);
+    expect(isWorkspaceScoped("pnpm -r build")).toBe(true);
+    expect(isWorkspaceScoped("npm run test")).toBe(false);
+    expect(isWorkspaceScoped("yarn build")).toBe(false);
   });
 });
 

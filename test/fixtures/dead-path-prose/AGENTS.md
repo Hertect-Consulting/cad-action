@@ -11,3 +11,4 @@
 - Every `src/**/*.test.ts` file runs in CI; `Node.js` 20 is the runtime and `.env` is never committed.
 - `README.md` lives in every package, and `*.md` files are checked by the linter.
 - Ship with `.claude/commands/ship.md`; design lands via `design/*` PRs; never edit `node_modules/next/dist/x.js`; worktrees go in `.claude/worktrees/**`.
+- Generated types land in `generated/schema.json`, which is never committed.

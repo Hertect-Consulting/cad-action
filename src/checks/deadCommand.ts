@@ -1,6 +1,13 @@
 import { isAllowedFirstToken } from "../allowlist.js";
 import { loadDefinedCommands, isDefined, type DefinedCommands } from "../definitions.js";
-import { extractBacktickedCommands, firstToken, makeTargetInvocation, packageScriptInvocation, shellSegments } from "../scan.js";
+import {
+  extractBacktickedCommands,
+  firstToken,
+  isWorkspaceScoped,
+  makeTargetInvocation,
+  packageScriptInvocation,
+  shellSegments,
+} from "../scan.js";
 import type { Finding, ParsedRule } from "../types.js";
 import { commandsIn, cuedCommandsIn, headingBlockLines, scannableFields } from "./shared.js";
 
@@ -16,12 +23,16 @@ function deadScriptFinding(rule: ParsedRule, commands: string[], line: number, d
   for (const cmd of commands) {
     for (const part of shellSegments(cmd)) {
       const script = packageScriptInvocation(part);
-      if (script && !defs.packageScripts.has(script)) {
+      const scoped = script !== null && isWorkspaceScoped(part);
+      const known = scoped ? defs.workspaceScripts : defs.packageScripts;
+      if (script && !known.has(script)) {
         out.push({
           check: "dead-command",
           file: rule.file,
           line,
-          sentence: `Dead command: \`${part}\` — package.json has no script named \`${script}\`.`,
+          sentence: scoped
+            ? `Dead command: \`${part}\` — no package.json in the repository has a script named \`${script}\`.`
+            : `Dead command: \`${part}\` — package.json has no script named \`${script}\`.`,
           lookedFor: script,
         });
       }
