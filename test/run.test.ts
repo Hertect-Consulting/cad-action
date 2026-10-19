@@ -72,14 +72,22 @@ describe("check 1 — dead command", () => {
 
   it("fires when a heading-block sentence runs a package.json script that does not exist", () => {
     const findings = byCheck(findingsFor("dead-script"), "dead-command").filter((f) => f.file === "GEMINI.md");
-    expect(findings).toHaveLength(1);
+    expect(findings).toHaveLength(2);
     expect(findings[0].line).toBe(4);
     expect(findings[0].lookedFor).toBe("deploy:staging");
   });
 
-  it("stays silent on scripts that exist, including npm test and pnpm run", () => {
+  it("resolves a workspace-scoped script against every package.json in the repository", () => {
+    const findings = byCheck(findingsFor("dead-script"), "dead-command").filter((f) => f.line === 7);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].sentence).toBe(
+      "Dead command: `pnpm --filter web lint` — no package.json in the repository has a script named `lint`.",
+    );
+  });
+
+  it("stays silent on scripts that exist, including npm test, pnpm run, and the three workspace forms", () => {
     const findings = byCheck(findingsFor("dead-script"), "dead-command");
-    expect(findings.map((f) => f.lookedFor).sort()).toEqual(["deploy:staging", "lint"]);
+    expect(findings.map((f) => f.lookedFor).sort()).toEqual(["deploy:staging", "lint", "lint"]);
   });
 
   it("does not treat every backticked word in a heading block as a command", () => {
@@ -150,7 +158,7 @@ describe("check 2 — dead path", () => {
     expect(findings[2].sentence).toBe("Dead path: `src/**/*.test.ts` matches no files at the head commit.");
   });
 
-  it("leaves git refs, media types, framework names, dotfiles, nested files, root globs, branch globs, dot directories and node_modules alone in a heading block", () => {
+  it("leaves git refs, media types, framework names, dotfiles, nested files, root globs, branch globs, dot directories, node_modules and gitignored paths alone in a heading block", () => {
     const findings = byCheck(findingsFor("dead-path-prose"), "dead-path");
     expect(findings).toHaveLength(4);
   });

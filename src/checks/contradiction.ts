@@ -1,4 +1,4 @@
-import { extractBacktickedCommands, makeTargetInvocation, packageScriptInvocation, shellSegments } from "../scan.js";
+import { extractBacktickedCommands, isWorkspaceScoped, makeTargetInvocation, packageScriptInvocation, shellSegments } from "../scan.js";
 import type { Finding, ParsedRule } from "../types.js";
 import { commandsIn, headingBlockLines, scannableFields } from "./shared.js";
 
@@ -42,6 +42,7 @@ function checkCommandContradictions(rules: ParsedRule[]): Finding[] {
       for (const cmd of commandsIn(bodyLine)) {
         for (const part of shellSegments(cmd)) {
           if (!packageScriptInvocation(part) && !makeTargetInvocation(part)) continue;
+          if (isWorkspaceScoped(part)) continue; // one package's script is not the repository's
           add({ file: rule.file, line, command: part.replace(/\s+/g, " "), noun: "command" });
         }
       }

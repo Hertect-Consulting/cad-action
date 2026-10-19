@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
@@ -56,5 +57,25 @@ export function dirExists(root: string, relPath: string): boolean {
     return statSync(join(root, relPath)).isDirectory();
   } catch {
     return false;
+  }
+}
+
+/**
+ * The subset of `paths` that git ignores at `root`, by asking git itself. A
+ * path that is ignored is not expected at the head commit, so a rule naming
+ * it is not stale. Empty when git is unavailable or `root` is not a checkout.
+ */
+export function ignoredPaths(root: string, paths: string[]): Set<string> {
+  if (paths.length === 0) return new Set();
+  try {
+    const stdout = execFileSync("git", ["check-ignore", "--", ...paths], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return new Set(stdout.split(/\r?\n/).filter(Boolean));
+  } catch {
+    // Exit 1 means none are ignored; anything else means git gave no answer.
+    return new Set();
   }
 }

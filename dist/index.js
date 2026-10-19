@@ -37377,14 +37377,57 @@ const PACKAGE_MANAGER_SUBCOMMANDS = new Set([
     "workspaces",
 ]);
 /**
+ * Removes a workspace selector from a package-manager command and says
+ * whether one was there: `pnpm --filter web test` and `npm run test -w web`
+ * run a script of one workspace package, `yarn workspace web test` likewise.
+ * The selector decides which package.json the script is looked up in.
+ */
+function stripWorkspaceSelector(parts) {
+    const tool = parts[0]?.replace(/^\.\//, "").toLowerCase();
+    let scoped = false;
+    const out = [parts[0]];
+    if (tool === "yarn" && parts[1] === "workspace" && parts[2]) {
+        return { parts: [parts[0], ...parts.slice(3)], scoped: true };
+    }
+    for (let i = 1; i < parts.length; i++) {
+        const p = parts[i];
+        if (tool === "pnpm" && (p === "--filter" || p === "-F" || p === "--filter-prod")) {
+            scoped = true;
+            i++;
+            continue;
+        }
+        if (tool === "pnpm" && (p.startsWith("--filter=") || p === "-r" || p === "--recursive" || p === "-w")) {
+            scoped = true;
+            continue;
+        }
+        if (tool === "npm" && (p === "-w" || p === "--workspace")) {
+            scoped = true;
+            i++;
+            continue;
+        }
+        if (tool === "npm" && (p.startsWith("--workspace=") || p === "-ws" || p === "--workspaces")) {
+            scoped = true;
+            continue;
+        }
+        out.push(p);
+    }
+    return { parts: out, scoped };
+}
+/** True when `command` runs a script in a workspace package rather than the root package.json. */
+function isWorkspaceScoped(command) {
+    return stripWorkspaceSelector(command.trim().split(/\s+/)).scoped;
+}
+/**
  * If `command` invokes a package.json script, returns the script name;
  * otherwise null. Recognises `npm run X`, `npm run-script X`, `npm test`,
  * `npm start`, `npm stop`, `npm restart`, `pnpm run X`, `yarn run X`, and
  * the bare `pnpm X` / `yarn X` forms when X is not a subcommand the package
  * manager owns itself: `yarn build` is a script, `yarn install` is not.
+ * A workspace selector (`--filter`, `-w`, `yarn workspace`) is skipped over;
+ * see isWorkspaceScoped for which package.json then applies.
  */
 function packageScriptInvocation(command) {
-    const parts = command.trim().split(/\s+/);
+    const { parts } = stripWorkspaceSelector(command.trim().split(/\s+/));
     const [tool, sub, name] = parts;
     if (!tool || !sub)
         return null;
@@ -37543,6 +37586,8 @@ function checkCommandContradictions(rules) {
                 for (const part of shellSegments(cmd)) {
                     if (!packageScriptInvocation(part) && !makeTargetInvocation(part))
                         continue;
+                    if (isWorkspaceScoped(part))
+                        continue; // one package's script is not the repository's
                     add({ file: rule.file, line, command: part.replace(/\s+/g, " "), noun: "command" });
                 }
             }
@@ -37682,11 +37727,14 @@ function isAllowedFirstToken(token, extra = []) {
     return extra.map((e) => e.trim().toLowerCase()).includes(t);
 }
 
+;// CONCATENATED MODULE: external "node:child_process"
+const external_node_child_process_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:child_process");
 ;// CONCATENATED MODULE: external "node:fs"
 const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
 ;// CONCATENATED MODULE: external "node:path"
 const external_node_path_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:path");
 ;// CONCATENATED MODULE: ./src/fs-walk.ts
+
 
 
 const SKIP_DIRS = new Set([
@@ -37747,6 +37795,27 @@ function dirExists(root, relPath) {
         return false;
     }
 }
+/**
+ * The subset of `paths` that git ignores at `root`, by asking git itself. A
+ * path that is ignored is not expected at the head commit, so a rule naming
+ * it is not stale. Empty when git is unavailable or `root` is not a checkout.
+ */
+function ignoredPaths(root, paths) {
+    if (paths.length === 0)
+        return new Set();
+    try {
+        const stdout = (0,external_node_child_process_namespaceObject.execFileSync)("git", ["check-ignore", "--", ...paths], {
+            cwd: root,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+        });
+        return new Set(stdout.split(/\r?\n/).filter(Boolean));
+    }
+    catch {
+        // Exit 1 means none are ignored; anything else means git gave no answer.
+        return new Set();
+    }
+}
 
 ;// CONCATENATED MODULE: ./src/definitions.ts
 
@@ -37767,20 +37836,33 @@ function readPackageScripts(pkg) {
  * Every package.json in the repository counts, not only the root one: in a
  * workspace the binary a rule names is usually installed by one package.
  */
-function readPackageDependencies(root) {
-    const names = new Set();
+function readAllPackageJsons(root) {
     const manifests = listFiles(root).filter((p) => p === "package.json" || p.endsWith("/package.json"));
+    const out = [];
     for (const path of manifests) {
-        let pkg;
         try {
-            pkg = JSON.parse(readRepoFile(root, path));
+            out.push(JSON.parse(readRepoFile(root, path)));
         }
         catch {
             continue;
         }
+    }
+    return out;
+}
+function readPackageDependencies(pkgs) {
+    const names = new Set();
+    for (const pkg of pkgs) {
         for (const name of [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]) {
             names.add(name);
         }
+    }
+    return names;
+}
+function readWorkspaceScripts(pkgs) {
+    const names = new Set();
+    for (const pkg of pkgs) {
+        for (const name of Object.keys(pkg.scripts ?? {}))
+            names.add(name);
     }
     return names;
 }
@@ -37809,9 +37891,11 @@ function readCiWorkflowText(root) {
     return files.map((p) => readRepoFile(root, p)).join("\n");
 }
 function loadDefinedCommands(root) {
+    const pkgs = readAllPackageJsons(root);
     return {
         packageScripts: readPackageScripts(readPackageJson(root)),
-        packageDependencies: readPackageDependencies(root),
+        workspaceScripts: readWorkspaceScripts(pkgs),
+        packageDependencies: readPackageDependencies(pkgs),
         makeTargets: readMakeTargets(root),
         ciWorkflowText: readCiWorkflowText(root),
     };
@@ -37844,12 +37928,16 @@ function deadScriptFinding(rule, commands, line, defs) {
     for (const cmd of commands) {
         for (const part of shellSegments(cmd)) {
             const script = packageScriptInvocation(part);
-            if (script && !defs.packageScripts.has(script)) {
+            const scoped = script !== null && isWorkspaceScoped(part);
+            const known = scoped ? defs.workspaceScripts : defs.packageScripts;
+            if (script && !known.has(script)) {
                 out.push({
                     check: "dead-command",
                     file: rule.file,
                     line,
-                    sentence: `Dead command: \`${part}\` — package.json has no script named \`${script}\`.`,
+                    sentence: scoped
+                        ? `Dead command: \`${part}\` — no package.json in the repository has a script named \`${script}\`.`
+                        : `Dead command: \`${part}\` — package.json has no script named \`${script}\`.`,
                     lookedFor: script,
                 });
             }
@@ -38131,7 +38219,11 @@ function checkDeadPath(root, rules) {
             }
         }
     }
-    return findings;
+    // A path git ignores is absent by design (a build output, a local secret),
+    // so a rule that names it is not stale. Globs are left as they are.
+    const exact = findings.filter((f) => f.lookedFor && !f.lookedFor.includes("*"));
+    const ignored = ignoredPaths(root, exact.map((f) => f.lookedFor.replace(/^\.\//, "")));
+    return findings.filter((f) => !f.lookedFor || !ignored.has(f.lookedFor.replace(/^\.\//, "")));
 }
 
 ;// CONCATENATED MODULE: ./src/checks/noCheck.ts

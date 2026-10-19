@@ -2,6 +2,8 @@ import { fileExists, listFiles, readRepoFile } from "./fs-walk.js";
 
 export interface DefinedCommands {
   packageScripts: Set<string>;
+  /** Scripts of every package.json in the repository, for a command that names a workspace package. */
+  workspaceScripts: Set<string>;
   /** Names of dependencies and devDependencies: `prisma`, `eslint`, `wrangler` are binaries a repo installs. */
   packageDependencies: Set<string>;
   makeTargets: Set<string>;
@@ -25,19 +27,33 @@ function readPackageScripts(pkg: Record<string, Record<string, string>>): Set<st
  * Every package.json in the repository counts, not only the root one: in a
  * workspace the binary a rule names is usually installed by one package.
  */
-function readPackageDependencies(root: string): Set<string> {
-  const names = new Set<string>();
+function readAllPackageJsons(root: string): Record<string, Record<string, string>>[] {
   const manifests = listFiles(root).filter((p) => p === "package.json" || p.endsWith("/package.json"));
+  const out: Record<string, Record<string, string>>[] = [];
   for (const path of manifests) {
-    let pkg: Record<string, Record<string, string>>;
     try {
-      pkg = JSON.parse(readRepoFile(root, path));
+      out.push(JSON.parse(readRepoFile(root, path)));
     } catch {
       continue;
     }
+  }
+  return out;
+}
+
+function readPackageDependencies(pkgs: Record<string, Record<string, string>>[]): Set<string> {
+  const names = new Set<string>();
+  for (const pkg of pkgs) {
     for (const name of [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]) {
       names.add(name);
     }
+  }
+  return names;
+}
+
+function readWorkspaceScripts(pkgs: Record<string, Record<string, string>>[]): Set<string> {
+  const names = new Set<string>();
+  for (const pkg of pkgs) {
+    for (const name of Object.keys(pkg.scripts ?? {})) names.add(name);
   }
   return names;
 }
@@ -67,9 +83,11 @@ function readCiWorkflowText(root: string): string {
 }
 
 export function loadDefinedCommands(root: string): DefinedCommands {
+  const pkgs = readAllPackageJsons(root);
   return {
     packageScripts: readPackageScripts(readPackageJson(root)),
-    packageDependencies: readPackageDependencies(root),
+    workspaceScripts: readWorkspaceScripts(pkgs),
+    packageDependencies: readPackageDependencies(pkgs),
     makeTargets: readMakeTargets(root),
     ciWorkflowText: readCiWorkflowText(root),
   };

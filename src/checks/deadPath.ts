@@ -1,4 +1,4 @@
-import { dirExists, fileExists, listFiles } from "../fs-walk.js";
+import { dirExists, fileExists, ignoredPaths, listFiles } from "../fs-walk.js";
 import { globExpand } from "../glob.js";
 import { extractPathLikeTokens } from "../scan.js";
 import type { Finding, ParsedRule } from "../types.js";
@@ -161,5 +161,9 @@ export function checkDeadPath(root: string, rules: ParsedRule[]): Finding[] {
     }
   }
 
-  return findings;
+  // A path git ignores is absent by design (a build output, a local secret),
+  // so a rule that names it is not stale. Globs are left as they are.
+  const exact = findings.filter((f) => f.lookedFor && !f.lookedFor.includes("*"));
+  const ignored = ignoredPaths(root, exact.map((f) => (f.lookedFor as string).replace(/^\.\//, "")));
+  return findings.filter((f) => !f.lookedFor || !ignored.has(f.lookedFor.replace(/^\.\//, "")));
 }
