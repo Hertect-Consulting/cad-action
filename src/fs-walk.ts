@@ -49,3 +49,12 @@ export function fileExists(root: string, relPath: string): boolean {
     return false;
   }
 }
+
+/** True for a directory at `relPath`, including ones `listFiles` does not walk (dot directories, `lib/`). */
+export function dirExists(root: string, relPath: string): boolean {
+  try {
+    return statSync(join(root, relPath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
