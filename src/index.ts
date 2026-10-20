@@ -1,8 +1,8 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
-import { buildComment, COMMENT_MARKER } from "./comment.js";
+import { buildComment, buildSuggestion, COMMENT_MARKER, suggestionMarker } from "./comment.js";
 import { run } from "./run.js";
-import type { ChangedFile, RunOptions } from "./types.js";
+import type { ChangedFile, Finding, RunOptions } from "./types.js";
 
 function splitList(value: string): string[] {
   return value
@@ -74,6 +74,47 @@ async function upsertStickyComment(token: string, body: string): Promise<void> {
   }
 }
 
+/**
+ * Posts each proposed fix as a review comment holding a suggested change,
+ * on the finding's own line, for the reader to accept or not in the normal
+ * review UI. One per finding, only where the line is in the pull request's
+ * diff, and only ever a review comment: a rerun updates the one it posted
+ * before (found by its marker) rather than posting another, and nothing is
+ * deleted. The only write this Action makes besides the sticky comment.
+ */
+async function upsertSuggestions(token: string, findings: Finding[]): Promise<void> {
+  const pr = github.context.payload.pull_request;
+  if (!pr) return;
+  const proposals = findings.filter((f) => f.proposal?.suggested);
+  if (proposals.length === 0) return;
+  const octokit = github.getOctokit(token);
+  const { owner, repo } = github.context.repo;
+  const pull_number = pr.number;
+  const commit_id = pr.head?.sha as string;
+
+  const existing = await octokit.paginate(octokit.rest.pulls.listReviewComments, { owner, repo, pull_number });
+  for (const f of proposals) {
+    const body = buildSuggestion(f);
+    const marker = suggestionMarker(f);
+    const previous = existing.find((c) => c.body?.includes(marker));
+    if (previous?.body === body) continue;
+    if (previous) {
+      await octokit.rest.pulls.updateReviewComment({ owner, repo, comment_id: previous.id, body });
+    } else {
+      await octokit.rest.pulls.createReviewComment({
+        owner,
+        repo,
+        pull_number,
+        commit_id,
+        path: f.file,
+        line: f.line,
+        side: "RIGHT",
+        body,
+      });
+    }
+  }
+}
+
 async function writeJobSummary(body: string): Promise<void> {
   await core.summary.addRaw(body, true).write();
 }
@@ -128,6 +169,11 @@ async function main(): Promise<void> {
       } catch (summaryErr) {
         core.warning(`Could not write the job summary either: ${(summaryErr as Error).message}`);
       }
+    }
+    try {
+      await upsertSuggestions(token, result.findings);
+    } catch (err) {
+      core.warning(`Could not post a suggested change: ${(err as Error).message}`);
     }
   }
 
