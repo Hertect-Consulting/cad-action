@@ -4,6 +4,7 @@ import { checkDeadPath } from "./checks/deadPath.js";
 import { checkNoCheckLine } from "./checks/noCheck.js";
 import { checkNoInstructionFile } from "./checks/noFile.js";
 import { discoverFiles } from "./discovery.js";
+import { explainInstructionChanges } from "./instructionChanges.js";
 import { buildInventory } from "./inventory.js";
 import { parseFiles } from "./parser.js";
 import type { Finding, RunOptions, RunResult } from "./types.js";
@@ -36,6 +37,7 @@ export function run(options: RunOptions): RunResult {
     fileCount: files.length,
     inventory: buildInventory(files, rules),
     notes: noFile.notes,
+    instructionChanges: explainInstructionChanges(options.changedFiles ?? [], files),
     conclusion: gating.length > 0 ? "failure" : "success",
   };
 }

@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/run.js";
-import type { CheckId } from "../src/types.js";
+import type { ChangedFile, CheckId } from "../src/types.js";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
 
@@ -321,10 +322,83 @@ describe("the hertect-tools dogfood fixture", () => {
       "dead-command AGENTS.md:12 deploy:staging",
       "contradiction AGENTS.md:12",
       "no-check AGENTS.md:14",
-      "no-check AGENTS.md:19",
+      "no-check AGENTS.md:21",
     ]);
     expect(resultFor("hertect-tools").notes.map((n) => n.sentence)).toEqual([
       "No instruction file for Copilot and Gemini. Not a finding: nothing here says they are in use.",
     ]);
+  });
+
+  it("has no instruction-change section outside a pull request", () => {
+    expect(resultFor("hertect-tools").instructionChanges).toEqual([]);
+  });
+});
+
+/**
+ * The pull request's files as the GitHub API lists them, in the shape
+ * index.ts maps them to. hertect-tools.pull-request.json is the pull request
+ * that produced the hertect-tools head: it reworded the preamble, added the
+ * deploy line and "Scope boundaries", dropped "Testing", added the Cursor
+ * deploy rule, removed GEMINI.md, moved rotate-keys.sh and touched src/.
+ */
+function pullRequestFiles(name: string): ChangedFile[] {
+  const raw = JSON.parse(readFileSync(join(FIXTURES, `${name}.pull-request.json`), "utf8")) as {
+    filename: string;
+    status: ChangedFile["status"];
+    patch?: string;
+    previous_filename?: string;
+  }[];
+  return raw.map((f) => ({ path: f.filename, status: f.status, patch: f.patch, previousPath: f.previous_filename }));
+}
+
+describe("an instruction pull request on the hertect-tools fixture", () => {
+  const result = run({
+    root: join(FIXTURES, "hertect-tools"),
+    extraPaths: [],
+    failOn: "all",
+    extraAllowCommands: [],
+    changedFiles: pullRequestFiles("hertect-tools"),
+  });
+
+  it("explains the three instruction files and leaves src/ and the moved script out", () => {
+    expect(result.instructionChanges.map((c) => `${c.path} ${c.status}`)).toEqual([
+      ".cursor/rules/deploy.mdc added",
+      "AGENTS.md modified",
+      "GEMINI.md removed",
+    ]);
+  });
+
+  it("says who reads each file, where it applies, which rules moved, and whose it is", () => {
+    const [cursor, agents, gemini] = result.instructionChanges;
+    expect(cursor).toMatchObject({
+      readBy: ["Cursor"],
+      appliesTo: "the whole repository",
+      added: ["deploy.mdc"],
+      owners: [],
+    });
+    expect(agents).toMatchObject({
+      readBy: ["Codex", "Cursor", "Copilot"],
+      appliesTo: "the whole repository",
+      added: ["Scope boundaries"],
+      removed: ["Testing"],
+      edited: ["Hertect Tools agent instructions", "Scripts"],
+      owners: ["@hertect-ops"],
+    });
+    expect(gemini).toMatchObject({ readBy: ["Gemini"], removed: ["Deploy"], owners: [] });
+  });
+
+  it("leaves the findings exactly as they are without the pull request", () => {
+    expect(result.findings).toEqual(findingsFor("hertect-tools"));
+  });
+
+  it("has no section when the pull request changes no instruction file", () => {
+    const code = run({
+      root: join(FIXTURES, "hertect-tools"),
+      extraPaths: [],
+      failOn: "all",
+      extraAllowCommands: [],
+      changedFiles: pullRequestFiles("hertect-tools").filter((f) => f.path === "src/index.ts" || f.path === "tools/rotate-keys.sh"),
+    });
+    expect(code.instructionChanges).toEqual([]);
   });
 });

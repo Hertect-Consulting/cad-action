@@ -1,4 +1,4 @@
-import type { CheckId, Finding, Inventory, RunResult } from "./types.js";
+import type { CheckId, Finding, InstructionChange, Inventory, RunResult } from "./types.js";
 
 export const COMMENT_MARKER = "<!-- ctrl-alt-delegate-action:sticky-comment -->";
 
@@ -19,6 +19,7 @@ export function buildComment(result: RunResult): string {
 
   lines.push(...inventoryLines(result.inventory));
   for (const note of result.notes) lines.push(note.sentence, "");
+  lines.push(...instructionChangeLines(result.instructionChanges));
 
   if (result.findings.length === 0) {
     lines.push("No findings.", "");
@@ -70,6 +71,40 @@ function inventoryLines(inventory: Inventory): string[] {
   }
 
   return lines;
+}
+
+/**
+ * A pull request that changes an instruction file changes what every agent
+ * on the repository is told, so the comment says what changed in those
+ * terms: who reads the file, where it applies, which rules moved, and whose
+ * it is. A pull request that changes no instruction file gets no section.
+ */
+function instructionChangeLines(changes: InstructionChange[]): string[] {
+  if (changes.length === 0) return [];
+  const lines = [`### Instruction files changed (${changes.length})`, ""];
+  for (const c of changes) {
+    const status = c.status === "renamed" && c.previousPath ? `renamed from \`${c.previousPath}\`` : c.status;
+    const owner =
+      c.owners.length === 0
+        ? c.status === "removed"
+          ? ""
+          : " No Owner line."
+        : ` Owner: ${c.owners.map((o) => `\`${o}\``).join(", ")}.`;
+    lines.push(`- \`${c.path}\` — ${status}. Read by ${list(c.readBy)}. Applies to ${c.appliesTo}.${owner}`);
+    if (c.added.length > 0) lines.push(`  - Added: ${c.added.map(quote).join(", ")}`);
+    if (c.removed.length > 0) lines.push(`  - Removed: ${c.removed.map(quote).join(", ")}`);
+    if (c.edited.length > 0) lines.push(`  - Edited: ${c.edited.map(quote).join(", ")}`);
+  }
+  lines.push("");
+  return lines;
+}
+
+function list(items: string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+function quote(title: string): string {
+  return `"${title}"`;
 }
 
 function plural(count: number, noun: string): string {
