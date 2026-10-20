@@ -7,6 +7,7 @@ import { discoverFiles } from "./discovery.js";
 import { explainInstructionChanges } from "./instructionChanges.js";
 import { buildInventory } from "./inventory.js";
 import { parseFiles } from "./parser.js";
+import { markSuggested } from "./proposals.js";
 import type { Finding, RunOptions, RunResult } from "./types.js";
 
 export function run(options: RunOptions): RunResult {
@@ -23,6 +24,7 @@ export function run(options: RunOptions): RunResult {
   ];
 
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  markSuggested(findings, options.changedFiles ?? []);
 
   const gating =
     options.failOn === "none"

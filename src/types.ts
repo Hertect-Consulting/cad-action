@@ -47,6 +47,21 @@ export interface Finding {
   line: number;
   sentence: string;
   lookedFor?: string;
+  /** The one fix the Action can see, when there is exactly one. A person decides. */
+  proposal?: Proposal;
+}
+
+/**
+ * A fix proposed as a GitHub suggested change: the text on the finding's
+ * line that is wrong, what it becomes, and the whole line with the fix
+ * applied, which is what the suggestion block holds.
+ */
+export interface Proposal {
+  from: string;
+  to: string;
+  replacement: string;
+  /** True when the line is in the pull request's diff, the only place a suggested change can be posted. */
+  suggested: boolean;
 }
 
 /**

@@ -37180,6 +37180,27 @@ function getOctokit(token, options, ...additionalPlugins) {
 //# sourceMappingURL=github.js.map
 ;// CONCATENATED MODULE: ./src/comment.ts
 const COMMENT_MARKER = "<!-- ctrl-alt-delegate-action:sticky-comment -->";
+/** The marker that keys one suggested change to its finding, so a rerun updates it rather than posting it again. */
+function suggestionMarker(f) {
+    return `<!-- ctrl-alt-delegate-action:suggestion:${f.file}:${f.line}:${f.lookedFor ?? ""} -->`;
+}
+/**
+ * The body of the review comment that carries a suggested change: the
+ * finding, who proposed the fix, and the fix in the fenced block GitHub
+ * turns into an "Add suggestion" button. The decision is the reader's.
+ */
+function buildSuggestion(f) {
+    if (!f.proposal)
+        return "";
+    return [
+        suggestionMarker(f),
+        `${f.sentence} Ctrl Alt Delegate proposes \`${f.proposal.from}\` → \`${f.proposal.to}\`; a person decides.`,
+        "",
+        "```suggestion",
+        f.proposal.replacement,
+        "```",
+    ].join("\n");
+}
 const CHECK_ORDER = ["dead-command", "dead-path", "no-check", "no-file", "contradiction"];
 const CHECK_LABEL = {
     "dead-command": "Dead command",
@@ -37279,7 +37300,21 @@ function plural(count, noun) {
 function formatFindingLine(f) {
     const lookedFor = f.lookedFor ? ` — looked for \`${f.lookedFor}\`` : "";
     const where = f.line > 0 ? `${f.file}:${f.line}` : f.file;
-    return `- \`${where}\` — ${f.sentence}${lookedFor}`;
+    return `- \`${where}\` — ${f.sentence}${lookedFor}${proposalText(f)}`;
+}
+/**
+ * A proposed fix is said in the comment whether or not it could be posted
+ * as a suggested change, which GitHub allows only on a line in the pull
+ * request's diff. Either way it is a proposal: Ctrl Alt Delegate made it
+ * and a person decides.
+ */
+function proposalText(f) {
+    if (!f.proposal)
+        return "";
+    const fix = `\`${f.proposal.from}\` → \`${f.proposal.to}\``;
+    return f.proposal.suggested
+        ? ` Ctrl Alt Delegate proposes ${fix} as a suggested change on this line; a person decides.`
+        : ` Ctrl Alt Delegate proposes ${fix}; this line is not in the pull request's diff, so no suggested change was posted.`;
 }
 
 ;// CONCATENATED MODULE: ./src/scan.ts
@@ -37947,7 +37982,126 @@ function definitions_isDefined(token, defs) {
     return wordBoundary.test(defs.ciWorkflowText);
 }
 
+;// CONCATENATED MODULE: ./src/proposals.ts
+/**
+ * A proposed fix exists only when there is exactly one thing the author can
+ * have meant. Two candidates, or none, is no proposal: a wrong suggestion a
+ * person accepts in one click is worse than a finding they read.
+ */
+/** True when `a` and `b` differ only by case. */
+function differsByCase(a, b) {
+    return a !== b && a.toLowerCase() === b.toLowerCase();
+}
+/**
+ * True when `a` and `b` differ by one hyphen or underscore: one inserted or
+ * removed (`typecheck` / `type-check`) or one swapped for the other
+ * (`deploy_staging` / `deploy-staging`). Case-sensitive, so the two rules
+ * do not combine into a looser one.
+ */
+function differsByOneDash(a, b) {
+    if (a === b)
+        return false;
+    if (a.length === b.length) {
+        let diff = -1;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i] === b[i])
+                continue;
+            if (diff !== -1 || !"-_".includes(a[i]) || !"-_".includes(b[i]))
+                return false;
+            diff = i;
+        }
+        return diff !== -1;
+    }
+    const [longer, shorter] = a.length > b.length ? [a, b] : [b, a];
+    if (longer.length !== shorter.length + 1)
+        return false;
+    for (let i = 0; i < longer.length; i++) {
+        if (!"-_".includes(longer[i]))
+            continue;
+        if (longer.slice(0, i) + longer.slice(i + 1) === shorter)
+            return true;
+    }
+    return false;
+}
+/**
+ * The one defined script or target that `name` is a near miss of, by case
+ * or by a single hyphen or underscore, or undefined when none or several.
+ */
+function nearMiss(name, defined) {
+    const candidates = [...defined].filter((d) => differsByCase(name, d) || differsByOneDash(name, d));
+    return candidates.length === 1 ? candidates[0] : undefined;
+}
+/**
+ * The one file in the repository with the same basename as `token`, or
+ * undefined when none or several: where a file moved, if the Action can
+ * see it. A bare file name has already been looked for everywhere by the
+ * dead-path check, so only a path with a folder can be moved.
+ */
+function movedFile(token, allFiles) {
+    const path = token.replace(/^\.\//, "");
+    if (!path.includes("/"))
+        return undefined;
+    const base = path.split("/").pop() ?? path;
+    const candidates = allFiles.filter((f) => f !== path && (f === base || f.endsWith("/" + base)));
+    return candidates.length === 1 ? candidates[0] : undefined;
+}
+/** `command` with its script or target name replaced, the rest of the command kept. */
+function renameInCommand(command, name, replacement) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return command.replace(new RegExp(`(^|\\s)${escaped}(?=\\s|$)`), `$1${replacement}`);
+}
+/**
+ * The fix as a whole line, which is what a GitHub suggested change
+ * replaces: the line the finding points at with `from` replaced by `to`.
+ * None when the line does not hold `from` exactly once, since the Action
+ * would then be guessing which occurrence the finding is about.
+ */
+function proposeReplacement(rule, line, from, to) {
+    const text = rule.bodyText.split(/\r?\n/)[line - rule.bodyStartLine];
+    if (text === undefined || from === to)
+        return undefined;
+    if (text.split(from).length !== 2)
+        return undefined;
+    return { from, to, replacement: text.replace(from, to), suggested: false };
+}
+/**
+ * The lines of each changed file that are in the pull request's diff, by
+ * new line number: the lines GitHub lets a review comment sit on. Context
+ * lines count; a file whose patch the API left out has none.
+ */
+function linesInDiff(changed) {
+    const out = new Map();
+    for (const file of changed) {
+        if (!file.patch || file.status === "removed")
+            continue;
+        const lines = new Set();
+        let newLine = 0;
+        for (const raw of file.patch.split(/\r?\n/)) {
+            const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+            if (hunk) {
+                newLine = Number(hunk[1]);
+                continue;
+            }
+            if (raw.startsWith("-") || raw.startsWith("\\"))
+                continue;
+            lines.add(newLine);
+            newLine++;
+        }
+        out.set(file.path, lines);
+    }
+    return out;
+}
+/** Marks each proposal whose line the pull request's diff holds, where a suggested change can be posted. */
+function markSuggested(findings, changed) {
+    const inDiff = linesInDiff(changed);
+    for (const f of findings) {
+        if (f.proposal)
+            f.proposal.suggested = inDiff.get(f.file)?.has(f.line) ?? false;
+    }
+}
+
 ;// CONCATENATED MODULE: ./src/checks/deadCommand.ts
+
 
 
 
@@ -37975,6 +38129,7 @@ function deadScriptFinding(rule, commands, line, defs) {
                         ? `Dead command: \`${part}\` — no package.json in the repository has a script named \`${script}\`.`
                         : `Dead command: \`${part}\` — package.json has no script named \`${script}\`.`,
                     lookedFor: script,
+                    proposal: proposeRename(rule, line, part, script, known),
                 });
             }
             const target = makeTargetInvocation(part);
@@ -37985,11 +38140,23 @@ function deadScriptFinding(rule, commands, line, defs) {
                     line,
                     sentence: `Dead command: \`${part}\` — no Makefile target named \`${target}\`.`,
                     lookedFor: target,
+                    proposal: proposeRename(rule, line, part, target, defs.makeTargets),
                 });
             }
         }
     }
     return out;
+}
+/**
+ * The fix for a script or target that is a near miss of exactly one defined
+ * one: the same command with the name corrected, as a suggested change on
+ * the line. `npm run typecheck` against a `type-check` script is the case.
+ */
+function proposeRename(rule, line, command, name, defined) {
+    const match = nearMiss(name, defined);
+    if (!match)
+        return undefined;
+    return proposeReplacement(rule, line, command, renameInCommand(command, name, match));
 }
 /** A command candidate after the script and target forms have been judged on their own. */
 function isPlainCommand(part) {
@@ -38104,6 +38271,7 @@ function globExpand(pattern, allPaths) {
 
 
 
+
 /**
  * First segments that look like a folder in prose but are not one: git
  * remotes and refs, media types, hosts. `origin/main` and
@@ -38199,6 +38367,15 @@ function proseSentence(token, claim) {
     }
     return `Dead path: \`${token}\` does not exist at the head commit.`;
 }
+/**
+ * The fix for a path whose file the Action can see elsewhere, as the one
+ * file with that basename: the path rewritten on the line, as a suggested
+ * change. `scripts/rotate-keys.sh` after the script moved to `tools/` is the case.
+ */
+function proposeMove(rule, line, token, allFiles) {
+    const moved = movedFile(token, allFiles);
+    return moved ? proposeReplacement(rule, line, token, moved) : undefined;
+}
 function checkDeadPath(root, rules) {
     const allFiles = listFiles(root);
     const findings = [];
@@ -38221,6 +38398,7 @@ function checkDeadPath(root, rules) {
                         line,
                         sentence: proseSentence(token, claim),
                         lookedFor: token,
+                        proposal: proposeMove(rule, line, token, allFiles),
                     });
                 }
             }
@@ -38250,6 +38428,7 @@ function checkDeadPath(root, rules) {
                         line: field.line,
                         sentence: `Dead path: \`${token}\` does not exist at the head commit.`,
                         lookedFor: token,
+                        proposal: proposeMove(rule, field.line, token, allFiles),
                     });
                 }
             }
@@ -38883,6 +39062,7 @@ function buildInventory(files, rules) {
 
 
 
+
 function run(options) {
     const files = discoverFiles(options.root, { extraPaths: options.extraPaths });
     const rules = parseFiles(files);
@@ -38895,6 +39075,7 @@ function run(options) {
         ...checkContradiction(rules),
     ];
     findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+    markSuggested(findings, options.changedFiles ?? []);
     const gating = options.failOn === "none"
         ? []
         : options.failOn === "dead-only"
@@ -38983,6 +39164,49 @@ async function upsertStickyComment(token, body) {
         await octokit.rest.issues.createComment({ owner, repo, issue_number, body });
     }
 }
+/**
+ * Posts each proposed fix as a review comment holding a suggested change,
+ * on the finding's own line, for the reader to accept or not in the normal
+ * review UI. One per finding, only where the line is in the pull request's
+ * diff, and only ever a review comment: a rerun updates the one it posted
+ * before (found by its marker) rather than posting another, and nothing is
+ * deleted. The only write this Action makes besides the sticky comment.
+ */
+async function upsertSuggestions(token, findings) {
+    const pr = github_context.payload.pull_request;
+    if (!pr)
+        return;
+    const proposals = findings.filter((f) => f.proposal?.suggested);
+    if (proposals.length === 0)
+        return;
+    const octokit = getOctokit(token);
+    const { owner, repo } = github_context.repo;
+    const pull_number = pr.number;
+    const commit_id = pr.head?.sha;
+    const existing = await octokit.paginate(octokit.rest.pulls.listReviewComments, { owner, repo, pull_number });
+    for (const f of proposals) {
+        const body = buildSuggestion(f);
+        const marker = suggestionMarker(f);
+        const previous = existing.find((c) => c.body?.includes(marker));
+        if (previous?.body === body)
+            continue;
+        if (previous) {
+            await octokit.rest.pulls.updateReviewComment({ owner, repo, comment_id: previous.id, body });
+        }
+        else {
+            await octokit.rest.pulls.createReviewComment({
+                owner,
+                repo,
+                pull_number,
+                commit_id,
+                path: f.file,
+                line: f.line,
+                side: "RIGHT",
+                body,
+            });
+        }
+    }
+}
 async function writeJobSummary(body) {
     await summary.addRaw(body, true).write();
 }
@@ -39032,6 +39256,12 @@ async function main() {
             catch (summaryErr) {
                 warning(`Could not write the job summary either: ${summaryErr.message}`);
             }
+        }
+        try {
+            await upsertSuggestions(token, result.findings);
+        }
+        catch (err) {
+            warning(`Could not post a suggested change: ${err.message}`);
         }
     }
     // The comment/summary step never gates the run — only findings do, and

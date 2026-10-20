@@ -2,6 +2,28 @@ import type { CheckId, Finding, InstructionChange, Inventory, RunResult } from "
 
 export const COMMENT_MARKER = "<!-- ctrl-alt-delegate-action:sticky-comment -->";
 
+/** The marker that keys one suggested change to its finding, so a rerun updates it rather than posting it again. */
+export function suggestionMarker(f: Finding): string {
+  return `<!-- ctrl-alt-delegate-action:suggestion:${f.file}:${f.line}:${f.lookedFor ?? ""} -->`;
+}
+
+/**
+ * The body of the review comment that carries a suggested change: the
+ * finding, who proposed the fix, and the fix in the fenced block GitHub
+ * turns into an "Add suggestion" button. The decision is the reader's.
+ */
+export function buildSuggestion(f: Finding): string {
+  if (!f.proposal) return "";
+  return [
+    suggestionMarker(f),
+    `${f.sentence} Ctrl Alt Delegate proposes \`${f.proposal.from}\` → \`${f.proposal.to}\`; a person decides.`,
+    "",
+    "```suggestion",
+    f.proposal.replacement,
+    "```",
+  ].join("\n");
+}
+
 const CHECK_ORDER: CheckId[] = ["dead-command", "dead-path", "no-check", "no-file", "contradiction"];
 const CHECK_LABEL: Record<CheckId, string> = {
   "dead-command": "Dead command",
@@ -114,5 +136,19 @@ function plural(count: number, noun: string): string {
 function formatFindingLine(f: Finding): string {
   const lookedFor = f.lookedFor ? ` — looked for \`${f.lookedFor}\`` : "";
   const where = f.line > 0 ? `${f.file}:${f.line}` : f.file;
-  return `- \`${where}\` — ${f.sentence}${lookedFor}`;
+  return `- \`${where}\` — ${f.sentence}${lookedFor}${proposalText(f)}`;
+}
+
+/**
+ * A proposed fix is said in the comment whether or not it could be posted
+ * as a suggested change, which GitHub allows only on a line in the pull
+ * request's diff. Either way it is a proposal: Ctrl Alt Delegate made it
+ * and a person decides.
+ */
+function proposalText(f: Finding): string {
+  if (!f.proposal) return "";
+  const fix = `\`${f.proposal.from}\` → \`${f.proposal.to}\``;
+  return f.proposal.suggested
+    ? ` Ctrl Alt Delegate proposes ${fix} as a suggested change on this line; a person decides.`
+    : ` Ctrl Alt Delegate proposes ${fix}; this line is not in the pull request's diff, so no suggested change was posted.`;
 }

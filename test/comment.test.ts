@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildComment, COMMENT_MARKER } from "../src/comment.js";
+import { buildComment, buildSuggestion, COMMENT_MARKER, suggestionMarker } from "../src/comment.js";
 import type { Inventory, RunResult } from "../src/types.js";
 
 function inventory(overrides: Partial<Inventory> = {}): Inventory {
@@ -245,6 +245,77 @@ describe("buildComment", () => {
       conclusion: "success",
     };
     expect(buildComment(result)).not.toContain("Instruction files changed");
+  });
+
+  // A proposed fix is said either way, and the sentence says who proposed it
+  // and who decides. Only a line in the pull request's diff can carry a
+  // suggested change, so the other case says why none was posted.
+  it("says what Ctrl Alt Delegate proposes for a finding, and whether it became a suggested change", () => {
+    const result: RunResult = {
+      ruleCount: 1,
+      fileCount: 1,
+      inventory: inventory({ ruleCount: 1 }),
+      notes: [],
+      instructionChanges: [],
+      conclusion: "failure",
+      findings: [
+        {
+          check: "dead-path",
+          file: "AGENTS.md",
+          line: 10,
+          sentence: "Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`.",
+          lookedFor: "scripts/rotate-keys.sh",
+          proposal: { from: "scripts/rotate-keys.sh", to: "tools/rotate-keys.sh", replacement: "- `tools/rotate-keys.sh` rotates keys.", suggested: true },
+        },
+        {
+          check: "dead-command",
+          file: "AGENTS.md",
+          line: 13,
+          sentence: "Dead command: `npm run typecheck` — package.json has no script named `typecheck`.",
+          lookedFor: "typecheck",
+          proposal: { from: "npm run typecheck", to: "npm run type-check", replacement: "- Run `npm run type-check`.", suggested: false },
+        },
+        {
+          check: "dead-command",
+          file: "AGENTS.md",
+          line: 11,
+          sentence: "Dead command: `npm run lint` — package.json has no script named `lint`.",
+          lookedFor: "lint",
+        },
+      ],
+    };
+    const body = buildComment(result);
+    expect(body).toContain(
+      "- `AGENTS.md:10` — Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`. — looked for `scripts/rotate-keys.sh` " +
+        "Ctrl Alt Delegate proposes `scripts/rotate-keys.sh` → `tools/rotate-keys.sh` as a suggested change on this line; a person decides.",
+    );
+    expect(body).toContain(
+      "— looked for `typecheck` Ctrl Alt Delegate proposes `npm run typecheck` → `npm run type-check`; " +
+        "this line is not in the pull request's diff, so no suggested change was posted.",
+    );
+    expect(body).toContain("— looked for `lint`\n");
+  });
+
+  it("builds a review comment holding the suggested change, keyed to its finding", () => {
+    const finding = {
+      check: "dead-path" as const,
+      file: "AGENTS.md",
+      line: 10,
+      sentence: "Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`.",
+      lookedFor: "scripts/rotate-keys.sh",
+      proposal: { from: "scripts/rotate-keys.sh", to: "tools/rotate-keys.sh", replacement: "- `tools/rotate-keys.sh` rotates keys.", suggested: true },
+    };
+    expect(suggestionMarker(finding)).toBe("<!-- ctrl-alt-delegate-action:suggestion:AGENTS.md:10:scripts/rotate-keys.sh -->");
+    expect(buildSuggestion(finding)).toBe(
+      "<!-- ctrl-alt-delegate-action:suggestion:AGENTS.md:10:scripts/rotate-keys.sh -->\n" +
+        "Dead path: `scripts/rotate-keys.sh` — `scripts/` exists but has no `rotate-keys.sh`. " +
+        "Ctrl Alt Delegate proposes `scripts/rotate-keys.sh` → `tools/rotate-keys.sh`; a person decides.\n" +
+        "\n" +
+        "```suggestion\n" +
+        "- `tools/rotate-keys.sh` rotates keys.\n" +
+        "```",
+    );
+    expect(buildSuggestion({ ...finding, proposal: undefined })).toBe("");
   });
 
   it("names the file alone, with no line, for a finding about a file that does not exist", () => {
