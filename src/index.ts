@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { buildComment, COMMENT_MARKER } from "./comment.js";
 import { run } from "./run.js";
-import type { RunOptions } from "./types.js";
+import type { ChangedFile, RunOptions } from "./types.js";
 
 function splitList(value: string): string[] {
   return value
@@ -27,6 +27,27 @@ export function isForkPullRequest(): boolean {
   const headRepo = pr.head?.repo?.full_name;
   const baseRepo = pr.base?.repo?.full_name;
   return Boolean(headRepo && baseRepo && headRepo !== baseRepo);
+}
+
+/**
+ * The pull request's changed files, read from the API rather than from git:
+ * actions/checkout is shallow by default, so the head checkout has no base
+ * to diff against. A read, and the only one the Action makes beyond the
+ * sticky comment it looks for. Empty outside a pull request or when the
+ * API gives no answer, in which case the comment simply has no section.
+ */
+export async function listChangedFiles(token: string): Promise<ChangedFile[]> {
+  const pr = github.context.payload.pull_request;
+  if (!pr || !token) return [];
+  const octokit = github.getOctokit(token);
+  const { owner, repo } = github.context.repo;
+  const files = await octokit.paginate(octokit.rest.pulls.listFiles, { owner, repo, pull_number: pr.number });
+  return files.map((f) => ({
+    path: f.filename,
+    status: f.status === "added" || f.status === "removed" || f.status === "renamed" ? f.status : "modified",
+    patch: f.patch,
+    previousPath: f.previous_filename,
+  }));
 }
 
 async function upsertStickyComment(token: string, body: string): Promise<void> {
@@ -59,11 +80,21 @@ async function writeJobSummary(body: string): Promise<void> {
 
 async function main(): Promise<void> {
   const root = process.cwd();
+  const token = core.getInput("token") || process.env.GITHUB_TOKEN || "";
+
+  let changedFiles: ChangedFile[] = [];
+  try {
+    changedFiles = await listChangedFiles(token);
+  } catch (err) {
+    core.warning(`Could not list the pull request's files, so the comment will not say which instruction files changed: ${(err as Error).message}`);
+  }
+
   const options: RunOptions = {
     root,
     extraPaths: splitList(core.getInput("paths")),
     failOn: parseFailOn(core.getInput("fail-on") || "all"),
     extraAllowCommands: splitList(core.getInput("allow-commands")),
+    changedFiles,
   };
 
   const result = run(options);
@@ -76,7 +107,6 @@ async function main(): Promise<void> {
   core.info(`Ctrl Alt Delegate: ${result.findings.length} finding(s) across ${result.ruleCount} rule(s) in ${result.fileCount} file(s).`);
 
   const body = buildComment(result);
-  const token = core.getInput("token") || process.env.GITHUB_TOKEN || "";
   const fork = isForkPullRequest();
 
   if (fork) {

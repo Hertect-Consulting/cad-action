@@ -22,6 +22,7 @@ describe("buildComment", () => {
       fileCount: 1,
       inventory: inventory(),
       notes: [],
+      instructionChanges: [],
       conclusion: "success",
     };
     const body = buildComment(empty);
@@ -38,6 +39,7 @@ describe("buildComment", () => {
       fileCount: 0,
       inventory: inventory({ fileCount: 0, ruleCount: 0, toolCount: 0, tools: [], ownedRuleCount: 0 }),
       notes: [],
+      instructionChanges: [],
       conclusion: "success",
     };
     expect(buildComment(empty)).toContain(COMMENT_MARKER);
@@ -49,6 +51,7 @@ describe("buildComment", () => {
       fileCount: 1,
       inventory: inventory({ ruleCount: 1 }),
       notes: [],
+      instructionChanges: [],
       conclusion: "failure",
       findings: [
         {
@@ -86,6 +89,7 @@ describe("buildComment", () => {
         reviewedRuleCount: 12,
       }),
       notes: [],
+      instructionChanges: [],
       conclusion: "success",
     };
     const body = buildComment(clean);
@@ -101,6 +105,7 @@ describe("buildComment", () => {
       fileCount: 1,
       inventory: inventory({ ruleCount: 2 }),
       notes: [],
+      instructionChanges: [],
       conclusion: "failure",
       findings: [
         { check: "no-check", file: "AGENTS.md", line: 3, sentence: "No Check line." },
@@ -117,6 +122,7 @@ describe("buildComment", () => {
       fileCount: 1,
       inventory: inventory({ fileCount: 1, ruleCount: 1, toolCount: 1 }),
       notes: [],
+      instructionChanges: [],
       conclusion: "success",
     };
     expect(buildComment(one)).toContain("**1 instruction file · 1 tool · 1 rule**");
@@ -129,6 +135,7 @@ describe("buildComment", () => {
       fileCount: 0,
       inventory: inventory({ fileCount: 0, ruleCount: 0, toolCount: 0, tools: [], ownedRuleCount: 0 }),
       notes: [],
+      instructionChanges: [],
       conclusion: "success",
     };
     const body = buildComment(none);
@@ -143,11 +150,101 @@ describe("buildComment", () => {
       fileCount: 1,
       inventory: inventory({ ruleCount: 1 }),
       notes: [{ sentence: "No instruction file for Gemini. Not a finding: nothing here says it is in use." }],
+      instructionChanges: [],
       conclusion: "success",
     };
     const body = buildComment(result);
     expect(body.indexOf("No instruction file for Gemini.")).toBeGreaterThan(body.indexOf("name an owner"));
     expect(body.indexOf("No instruction file for Gemini.")).toBeLessThan(body.indexOf("No findings."));
+  });
+
+  // An instruction pull request changes what every agent on the repository is
+  // told, so the comment says what changed in those terms, between the
+  // inventory and the findings, and says nothing when no such file changed.
+  it("explains the instruction files a pull request changed, above the findings", () => {
+    const result: RunResult = {
+      ruleCount: 3,
+      fileCount: 2,
+      inventory: inventory({ fileCount: 2, ruleCount: 3, toolCount: 2 }),
+      notes: [],
+      instructionChanges: [
+        {
+          path: ".cursor/rules/deploy.mdc",
+          kind: "CURSOR_MDC",
+          status: "added",
+          readBy: ["Cursor"],
+          appliesTo: "`src/**/*.ts`",
+          added: ["deploy.mdc"],
+          removed: [],
+          edited: [],
+          owners: [],
+        },
+        {
+          path: "AGENTS.md",
+          kind: "AGENTS",
+          status: "modified",
+          readBy: ["Codex", "Cursor", "Copilot"],
+          appliesTo: "the whole repository",
+          added: ["Scope boundaries"],
+          removed: ["Testing"],
+          edited: ["Scripts", "Standing rules"],
+          owners: ["@hertect-ops"],
+        },
+        {
+          path: "docs/GEMINI.md",
+          previousPath: "GEMINI.md",
+          kind: "GEMINI",
+          status: "renamed",
+          readBy: ["Gemini"],
+          appliesTo: "`docs/`",
+          added: [],
+          removed: [],
+          edited: [],
+          owners: [],
+        },
+        {
+          path: "old/AGENTS.md",
+          kind: "AGENTS",
+          status: "removed",
+          readBy: ["Codex", "Cursor", "Copilot"],
+          appliesTo: "`old/`",
+          added: [],
+          removed: ["Legacy"],
+          edited: [],
+          owners: [],
+        },
+      ],
+      conclusion: "failure",
+      findings: [{ check: "no-check", file: "AGENTS.md", line: 3, sentence: "No Check line." }],
+    };
+    const body = buildComment(result);
+    expect(body).toContain("### Instruction files changed (4)");
+    expect(body).toContain(
+      "- `.cursor/rules/deploy.mdc` — added. Read by Cursor. Applies to `src/**/*.ts`. No Owner line.\n" +
+        '  - Added: "deploy.mdc"\n' +
+        "- `AGENTS.md` — modified. Read by Codex, Cursor and Copilot. Applies to the whole repository. Owner: `@hertect-ops`.\n" +
+        '  - Added: "Scope boundaries"\n' +
+        '  - Removed: "Testing"\n' +
+        '  - Edited: "Scripts", "Standing rules"\n' +
+        "- `docs/GEMINI.md` — renamed from `GEMINI.md`. Read by Gemini. Applies to `docs/`. No Owner line.\n" +
+        "- `old/AGENTS.md` — removed. Read by Codex, Cursor and Copilot. Applies to `old/`.\n" +
+        '  - Removed: "Legacy"\n',
+    );
+    expect(body.indexOf("### Instruction files changed")).toBeGreaterThan(body.indexOf("name an owner"));
+    expect(body.indexOf("### Instruction files changed")).toBeLessThan(body.indexOf("### No Check line"));
+  });
+
+  it("has no instruction-change section when the pull request changed no instruction file", () => {
+    const result: RunResult = {
+      findings: [],
+      ruleCount: 1,
+      fileCount: 1,
+      inventory: inventory({ ruleCount: 1 }),
+      notes: [],
+      instructionChanges: [],
+      conclusion: "success",
+    };
+    expect(buildComment(result)).not.toContain("Instruction files changed");
   });
 
   it("names the file alone, with no line, for a finding about a file that does not exist", () => {
@@ -156,6 +253,7 @@ describe("buildComment", () => {
       fileCount: 1,
       inventory: inventory({ ruleCount: 1 }),
       notes: [],
+      instructionChanges: [],
       conclusion: "failure",
       findings: [
         {

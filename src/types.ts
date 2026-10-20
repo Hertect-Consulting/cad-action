@@ -62,6 +62,38 @@ export interface RunOptions {
   extraPaths: string[];
   failOn: "all" | "none" | "dead-only";
   extraAllowCommands: string[];
+  /** The pull request's changed files, from the GitHub API; absent outside a pull request. */
+  changedFiles?: ChangedFile[];
+}
+
+/** One file of a pull request as the GitHub API lists it: its path, what happened to it, and its unified diff. */
+export interface ChangedFile {
+  path: string;
+  status: "added" | "removed" | "modified" | "renamed";
+  /** The unified diff; absent for a binary or a very large file. */
+  patch?: string;
+  previousPath?: string;
+}
+
+/**
+ * What a pull request did to one instruction file, in instruction terms:
+ * who reads it, where it applies, which rules changed, and whose it is.
+ */
+export interface InstructionChange {
+  path: string;
+  previousPath?: string;
+  kind: FileKind;
+  status: ChangedFile["status"];
+  /** Tool names, e.g. "Claude Code". */
+  readBy: string[];
+  /** A short phrase: "the whole repository", a folder, or a glob. */
+  appliesTo: string;
+  /** Rule titles, by heading, as the diff shows them. */
+  added: string[];
+  removed: string[];
+  edited: string[];
+  /** The file's Owner lines at the head commit, verbatim and distinct. Empty when it has none. */
+  owners: string[];
 }
 
 export interface InventoryTool {
@@ -93,5 +125,7 @@ export interface RunResult {
   fileCount: number;
   inventory: Inventory;
   notes: Note[];
+  /** The instruction files this pull request changed; empty when it changed none or this is not a pull request. */
+  instructionChanges: InstructionChange[];
   conclusion: "success" | "failure";
 }

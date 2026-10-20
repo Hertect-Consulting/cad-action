@@ -29229,7 +29229,8 @@ var __webpack_exports__ = {};
 
 // EXPORTS
 __nccwpck_require__.d(__webpack_exports__, {
-  B: () => (/* binding */ isForkPullRequest)
+  B: () => (/* binding */ isForkPullRequest),
+  A: () => (/* binding */ listChangedFiles)
 });
 
 ;// CONCATENATED MODULE: external "os"
@@ -37194,6 +37195,7 @@ function buildComment(result) {
     lines.push(...inventoryLines(result.inventory));
     for (const note of result.notes)
         lines.push(note.sentence, "");
+    lines.push(...instructionChangeLines(result.instructionChanges));
     if (result.findings.length === 0) {
         lines.push("No findings.", "");
     }
@@ -37236,6 +37238,40 @@ function inventoryLines(inventory) {
             `${inventory.reviewedRuleCount} record a review date.`, "");
     }
     return lines;
+}
+/**
+ * A pull request that changes an instruction file changes what every agent
+ * on the repository is told, so the comment says what changed in those
+ * terms: who reads the file, where it applies, which rules moved, and whose
+ * it is. A pull request that changes no instruction file gets no section.
+ */
+function instructionChangeLines(changes) {
+    if (changes.length === 0)
+        return [];
+    const lines = [`### Instruction files changed (${changes.length})`, ""];
+    for (const c of changes) {
+        const status = c.status === "renamed" && c.previousPath ? `renamed from \`${c.previousPath}\`` : c.status;
+        const owner = c.owners.length === 0
+            ? c.status === "removed"
+                ? ""
+                : " No Owner line."
+            : ` Owner: ${c.owners.map((o) => `\`${o}\``).join(", ")}.`;
+        lines.push(`- \`${c.path}\` — ${status}. Read by ${list(c.readBy)}. Applies to ${c.appliesTo}.${owner}`);
+        if (c.added.length > 0)
+            lines.push(`  - Added: ${c.added.map(quote).join(", ")}`);
+        if (c.removed.length > 0)
+            lines.push(`  - Removed: ${c.removed.map(quote).join(", ")}`);
+        if (c.edited.length > 0)
+            lines.push(`  - Edited: ${c.edited.map(quote).join(", ")}`);
+    }
+    lines.push("");
+    return lines;
+}
+function list(items) {
+    return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+function quote(title) {
+    return `"${title}"`;
 }
 function plural(count, noun) {
     return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -38325,6 +38361,7 @@ function checkNoInstructionFile(root, files) {
 
 
 
+/** The kind the Action reads a path as, or undefined for a file it does not read. */
 function classify(path) {
     const base = path.split("/").pop() ?? path;
     if (base === "AGENTS.md")
@@ -38387,60 +38424,6 @@ function discoverFiles(root, options = {}) {
 }
 function guessExtraKind(path) {
     return classify(path) ?? "AGENTS";
-}
-
-;// CONCATENATED MODULE: ./src/inventory.ts
-/**
- * The label a reader recognises, not the internal kind. "Cursor rules" rather
- * than CURSOR_MDC, because this line is read by someone deciding whether the
- * Action understood their repository.
- */
-const TOOL_LABEL = {
-    AGENTS: "AGENTS.md",
-    CLAUDE: "CLAUDE.md",
-    COPILOT: "Copilot instructions",
-    CURSOR_MDC: "Cursor rules",
-    CURSORRULES: ".cursorrules",
-    GEMINI: "GEMINI.md",
-    SKILL: "SKILL.md",
-};
-/** Fixed so the same repository always renders the same line. */
-const TOOL_ORDER = [
-    "AGENTS",
-    "CLAUDE",
-    "COPILOT",
-    "CURSOR_MDC",
-    "CURSORRULES",
-    "GEMINI",
-    "SKILL",
-];
-/**
- * What exists, counted from what was already discovered and parsed. This adds
- * no file reads and no parsing of its own: `files` and `rules` are the same
- * values the checks ran against, so the inventory cannot disagree with them.
- *
- * Ownership and review are counted as "recorded", never as "current". Whether a
- * review is still valid needs the history this Action deliberately does not
- * keep, so the count says how many rules carry the line and stops there.
- */
-function buildInventory(files, rules) {
-    const byKind = new Map();
-    for (const file of files) {
-        byKind.set(file.kind, (byKind.get(file.kind) ?? 0) + 1);
-    }
-    const tools = TOOL_ORDER.filter((kind) => byKind.has(kind)).map((kind) => ({
-        kind,
-        label: TOOL_LABEL[kind],
-        fileCount: byKind.get(kind),
-    }));
-    return {
-        fileCount: files.length,
-        ruleCount: rules.length,
-        toolCount: tools.length,
-        tools,
-        ownedRuleCount: rules.filter((r) => Boolean(r.owner?.trim())).length,
-        reviewedRuleCount: rules.filter((r) => Boolean(r.reviewed?.trim())).length,
-    };
 }
 
 ;// CONCATENATED MODULE: ./src/parser.ts
@@ -38652,7 +38635,246 @@ function parseFiles(files) {
     return files.flatMap(parseFile);
 }
 
+;// CONCATENATED MODULE: ./src/instructionChanges.ts
+
+
+/**
+ * The tools that read a file of each kind. AGENTS.md is the shared file:
+ * Codex reads it as its own, and Cursor and Copilot read it alongside their
+ * rules. A SKILL.md is loaded by the tools that load skills.
+ */
+const READERS = {
+    AGENTS: ["Codex", "Cursor", "Copilot"],
+    CLAUDE: ["Claude Code"],
+    COPILOT: ["Copilot"],
+    CURSOR_MDC: ["Cursor"],
+    CURSORRULES: ["Cursor"],
+    GEMINI: ["Gemini"],
+    SKILL: ["Claude Code", "Codex"],
+};
+/** The value of one frontmatter key (`globs:`), or undefined when the file has no frontmatter or no such key. */
+function frontmatterValue(content, key) {
+    const lines = content.split(/\r?\n/);
+    if (lines[0]?.trim() !== "---")
+        return undefined;
+    for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim() === "---")
+            return undefined;
+        const m = new RegExp(`^${key}:\\s*(.*)$`, "i").exec(lines[i]);
+        if (m)
+            return m[1].trim();
+    }
+    return undefined;
+}
+/**
+ * Where the file applies, in the reader's terms: the whole repository for
+ * a root file, the folder for a nested one, the `globs:` frontmatter for a
+ * Cursor rule, and the skill's own folder for a SKILL.md, which is loaded
+ * when invoked rather than always on.
+ */
+function appliesTo(path, kind, content) {
+    const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+    if (kind === "SKILL")
+        return folder ? `when the skill is invoked (\`${folder}\`)` : "when the skill is invoked";
+    if (kind === "CURSOR_MDC") {
+        const globs = content ? frontmatterValue(content, "globs") : undefined;
+        if (globs)
+            return `\`${globs}\``;
+        const always = content ? frontmatterValue(content, "alwaysApply") : undefined;
+        return always === "true" ? "the whole repository" : "when Cursor attaches the rule";
+    }
+    if (kind === "COPILOT" || kind === "CURSORRULES")
+        return "the whole repository";
+    return folder ? `\`${folder}\`` : "the whole repository";
+}
+/** The `## ` heading text of a diff line, with a five-line `Rule:` prefix removed, or undefined. */
+function headingOf(text) {
+    const m = /^##\s+(.*)$/.exec(text);
+    return m ? m[1].replace(/^Rule:\s*/i, "").trim() : undefined;
+}
+/**
+ * The rule each line of the head content sits under, from the same parser
+ * the checks use, so a changed line is named by the rule the Action reads
+ * it as. Lines before the first rule (frontmatter, a lone title) are none.
+ */
+function sectionIndex(file) {
+    if (!file)
+        return () => undefined;
+    const rules = parseFile(file);
+    return (line) => {
+        let title;
+        for (const rule of rules) {
+            if (rule.titleLine <= line)
+                title = rule.title;
+        }
+        return title;
+    };
+}
+/**
+ * Walks a unified diff and names the rules it touches: a `## ` heading on a
+ * `+` line is a rule added, on a `-` line a rule removed, and any other
+ * changed line is an edit to the rule it sits under at the head commit. A
+ * heading both removed and added is one rule edited. Removed lines are
+ * placed by the new line before them, which is the rule they left.
+ */
+function rulesChanged(patch, sectionAt) {
+    const added = new Set();
+    const removed = new Set();
+    const edited = new Set();
+    if (!patch)
+        return { added: [], removed: [], edited: [] };
+    let newLine = 0;
+    for (const raw of patch.split(/\r?\n/)) {
+        const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+        if (hunk) {
+            newLine = Number(hunk[1]);
+            continue;
+        }
+        if (raw.startsWith("\\"))
+            continue; // "\ No newline at end of file"
+        const marker = raw[0];
+        const text = raw.slice(1);
+        const blank = text.trim() === ""; // a blank line moved is not a rule edited
+        if (marker === "+") {
+            const heading = headingOf(text);
+            if (heading)
+                added.add(heading);
+            else if (!blank) {
+                const section = sectionAt(newLine);
+                if (section)
+                    edited.add(section);
+            }
+            newLine++;
+        }
+        else if (marker === "-") {
+            const heading = headingOf(text);
+            if (heading)
+                removed.add(heading);
+            else if (!blank) {
+                const section = sectionAt(Math.max(newLine - 1, 1));
+                if (section)
+                    edited.add(section);
+            }
+        }
+        else {
+            newLine++;
+        }
+    }
+    for (const title of [...added]) {
+        if (removed.has(title)) {
+            added.delete(title);
+            removed.delete(title);
+            edited.add(title);
+        }
+    }
+    for (const title of [...edited]) {
+        if (added.has(title) || removed.has(title))
+            edited.delete(title);
+    }
+    return { added: [...added], removed: [...removed], edited: [...edited] };
+}
+/** In a file that is new, every rule is added, including one with no heading of its own. */
+function forStatus(rules, status) {
+    if (status !== "added")
+        return rules;
+    return { added: [...rules.edited, ...rules.added], removed: [], edited: [] };
+}
+/** The distinct Owner lines of the file at the head commit, in order of appearance. */
+function ownersOf(file) {
+    if (!file)
+        return [];
+    const owners = [];
+    for (const rule of parseFile(file)) {
+        const owner = rule.owner?.trim();
+        if (owner && !owners.includes(owner))
+            owners.push(owner);
+    }
+    return owners;
+}
+/**
+ * What a pull request did to the instruction layer, file by file, for the
+ * files the Action knows. A changed file of any other kind is not listed.
+ * `files` is the head commit as discovered, so a removed file has no head
+ * content and is described from its path and its diff alone.
+ */
+function explainInstructionChanges(changed, files) {
+    const out = [];
+    for (const change of changed) {
+        const kind = classify(change.path);
+        if (!kind)
+            continue;
+        const head = change.status === "removed" ? undefined : files.find((f) => f.path === change.path);
+        const rules = forStatus(rulesChanged(change.patch, sectionIndex(head)), change.status);
+        out.push({
+            path: change.path,
+            previousPath: change.previousPath,
+            kind,
+            status: change.status,
+            readBy: READERS[kind],
+            appliesTo: appliesTo(change.path, kind, head?.content),
+            ...rules,
+            owners: ownersOf(head),
+        });
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+;// CONCATENATED MODULE: ./src/inventory.ts
+/**
+ * The label a reader recognises, not the internal kind. "Cursor rules" rather
+ * than CURSOR_MDC, because this line is read by someone deciding whether the
+ * Action understood their repository.
+ */
+const TOOL_LABEL = {
+    AGENTS: "AGENTS.md",
+    CLAUDE: "CLAUDE.md",
+    COPILOT: "Copilot instructions",
+    CURSOR_MDC: "Cursor rules",
+    CURSORRULES: ".cursorrules",
+    GEMINI: "GEMINI.md",
+    SKILL: "SKILL.md",
+};
+/** Fixed so the same repository always renders the same line. */
+const TOOL_ORDER = [
+    "AGENTS",
+    "CLAUDE",
+    "COPILOT",
+    "CURSOR_MDC",
+    "CURSORRULES",
+    "GEMINI",
+    "SKILL",
+];
+/**
+ * What exists, counted from what was already discovered and parsed. This adds
+ * no file reads and no parsing of its own: `files` and `rules` are the same
+ * values the checks ran against, so the inventory cannot disagree with them.
+ *
+ * Ownership and review are counted as "recorded", never as "current". Whether a
+ * review is still valid needs the history this Action deliberately does not
+ * keep, so the count says how many rules carry the line and stops there.
+ */
+function buildInventory(files, rules) {
+    const byKind = new Map();
+    for (const file of files) {
+        byKind.set(file.kind, (byKind.get(file.kind) ?? 0) + 1);
+    }
+    const tools = TOOL_ORDER.filter((kind) => byKind.has(kind)).map((kind) => ({
+        kind,
+        label: TOOL_LABEL[kind],
+        fileCount: byKind.get(kind),
+    }));
+    return {
+        fileCount: files.length,
+        ruleCount: rules.length,
+        toolCount: tools.length,
+        tools,
+        ownedRuleCount: rules.filter((r) => Boolean(r.owner?.trim())).length,
+        reviewedRuleCount: rules.filter((r) => Boolean(r.reviewed?.trim())).length,
+    };
+}
+
 ;// CONCATENATED MODULE: ./src/run.ts
+
 
 
 
@@ -38684,6 +38906,7 @@ function run(options) {
         fileCount: files.length,
         inventory: buildInventory(files, rules),
         notes: noFile.notes,
+        instructionChanges: explainInstructionChanges(options.changedFiles ?? [], files),
         conclusion: gating.length > 0 ? "failure" : "success",
     };
 }
@@ -38717,6 +38940,27 @@ function isForkPullRequest() {
     const baseRepo = pr.base?.repo?.full_name;
     return Boolean(headRepo && baseRepo && headRepo !== baseRepo);
 }
+/**
+ * The pull request's changed files, read from the API rather than from git:
+ * actions/checkout is shallow by default, so the head checkout has no base
+ * to diff against. A read, and the only one the Action makes beyond the
+ * sticky comment it looks for. Empty outside a pull request or when the
+ * API gives no answer, in which case the comment simply has no section.
+ */
+async function listChangedFiles(token) {
+    const pr = github_context.payload.pull_request;
+    if (!pr || !token)
+        return [];
+    const octokit = getOctokit(token);
+    const { owner, repo } = github_context.repo;
+    const files = await octokit.paginate(octokit.rest.pulls.listFiles, { owner, repo, pull_number: pr.number });
+    return files.map((f) => ({
+        path: f.filename,
+        status: f.status === "added" || f.status === "removed" || f.status === "renamed" ? f.status : "modified",
+        patch: f.patch,
+        previousPath: f.previous_filename,
+    }));
+}
 async function upsertStickyComment(token, body) {
     const pr = github_context.payload.pull_request;
     if (!pr) {
@@ -38744,11 +38988,20 @@ async function writeJobSummary(body) {
 }
 async function main() {
     const root = process.cwd();
+    const token = getInput("token") || process.env.GITHUB_TOKEN || "";
+    let changedFiles = [];
+    try {
+        changedFiles = await listChangedFiles(token);
+    }
+    catch (err) {
+        warning(`Could not list the pull request's files, so the comment will not say which instruction files changed: ${err.message}`);
+    }
     const options = {
         root,
         extraPaths: splitList(getInput("paths")),
         failOn: parseFailOn(getInput("fail-on") || "all"),
         extraAllowCommands: splitList(getInput("allow-commands")),
+        changedFiles,
     };
     const result = run(options);
     const findingsJson = JSON.stringify(result.findings, null, 2);
@@ -38757,7 +39010,6 @@ async function main() {
     setOutput("conclusion", result.conclusion);
     info(`Ctrl Alt Delegate: ${result.findings.length} finding(s) across ${result.ruleCount} rule(s) in ${result.fileCount} file(s).`);
     const body = buildComment(result);
-    const token = getInput("token") || process.env.GITHUB_TOKEN || "";
     const fork = isForkPullRequest();
     if (fork) {
         info("Fork pull request: GITHUB_TOKEN is read-only here, so findings go to the job summary instead of a PR comment.");
@@ -38797,6 +39049,7 @@ if (!process.env.VITEST) {
 }
 
 var __webpack_exports__isForkPullRequest = __webpack_exports__.B;
-export { __webpack_exports__isForkPullRequest as isForkPullRequest };
+var __webpack_exports__listChangedFiles = __webpack_exports__.A;
+export { __webpack_exports__isForkPullRequest as isForkPullRequest, __webpack_exports__listChangedFiles as listChangedFiles };
 
 //# sourceMappingURL=index.js.map

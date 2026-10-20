@@ -42,6 +42,8 @@ Five checks, each a finding with file, line, and one sentence. Prose counts: a h
 
 One sticky PR comment, grouped by check, updated on each run — never a new comment per run.
 
+When the pull request itself changes an instruction file, the comment also says what changed in instruction terms: which files, which tools read each one (Claude Code, Codex, Cursor, Copilot, Gemini), what each applies to, which rules were added, removed or edited by heading, and the file's `Owner:` line if it has one. A pull request that changes no instruction file gets no such section.
+
 ## What it reads
 
 The rules and skills in these files, at the pull request's head commit:

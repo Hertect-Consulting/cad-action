@@ -16,6 +16,8 @@ reads it through CLAUDE.md, which contains only: `Read AGENTS.md and follow it.`
 - Do not commit credentials or private keys. The Cloudflare Web Analytics site token is
   public configuration, not a secret.
 
+Owner: @hertect-ops
+
 ## Scope boundaries
 
 - This repository is internal tooling only, not customer-facing. Do not add customer data
