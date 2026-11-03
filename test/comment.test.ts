@@ -27,7 +27,7 @@ describe("buildComment", () => {
     };
     const body = buildComment(empty);
     expect(body.trimEnd().endsWith(
-      "Receipts for one repo. Ctrl Alt Delegate keeps them for all of yours.\n" +
+      "Your AI tools know what you told them. Ctrl Alt Delegate knows what everyone told theirs.\n" +
       "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)"
     )).toBe(true);
   });

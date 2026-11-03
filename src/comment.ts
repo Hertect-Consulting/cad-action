@@ -33,7 +33,7 @@ const CHECK_LABEL: Record<CheckId, string> = {
   contradiction: "Contradiction",
 };
 
-const TAGLINE = "Receipts for one repo. Ctrl Alt Delegate keeps them for all of yours.";
+const TAGLINE = "Your AI tools know what you told them. Ctrl Alt Delegate knows what everyone told theirs.";
 const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)";
 
 export function buildComment(result: RunResult): string {

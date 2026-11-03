@@ -82,4 +82,4 @@ Writes to your repo, opens PRs, rewrites your rules, sends your data anywhere, l
 
 ---
 
-Receipts for one repo. Ctrl Alt Delegate keeps them for all of yours. [hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)
+Your AI tools know what you told them. Ctrl Alt Delegate knows what everyone told theirs. [hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)

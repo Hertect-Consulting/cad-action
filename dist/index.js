@@ -37209,7 +37209,7 @@ const CHECK_LABEL = {
     "no-file": "No instruction file",
     contradiction: "Contradiction",
 };
-const TAGLINE = "Receipts for one repo. Ctrl Alt Delegate keeps them for all of yours.";
+const TAGLINE = "Your AI tools know what you told them. Ctrl Alt Delegate knows what everyone told theirs.";
 const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)";
 function buildComment(result) {
     const lines = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
