@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { buildComment, buildSuggestion, COMMENT_MARKER, suggestionMarker } from "./comment.js";
+import { applyCompanyPolicy } from "./policy.js";
 import { run } from "./run.js";
 import type { ChangedFile, Finding, RunOptions } from "./types.js";
 
@@ -139,6 +140,20 @@ async function main(): Promise<void> {
   };
 
   const result = run(options);
+
+  // Optional: the company's own policy, read only, with its license credential. Without the two
+  // inputs nothing is requested and the checks decide as they always have. With them, a policy
+  // that is applied replaces `fail-on` for the conclusion; anything else falls back to it.
+  const credential = core.getInput("license-credential");
+  if (credential) core.setSecret(credential);
+  const { step, evaluation, conclusion, commentLines } = await applyCompanyPolicy(result, {
+    credential,
+    baseUrl: core.getInput("cad-url"),
+  });
+  result.conclusion = conclusion;
+  if (step.line) core.warning(step.line);
+  core.setOutput("policy-status", step.status);
+
   const findingsJson = JSON.stringify(result.findings, null, 2);
 
   core.setOutput("findings-json", findingsJson);
@@ -147,7 +162,7 @@ async function main(): Promise<void> {
 
   core.info(`Ctrl Alt Delegate: ${result.findings.length} finding(s) across ${result.ruleCount} rule(s) in ${result.fileCount} file(s).`);
 
-  const body = buildComment(result);
+  const body = buildComment(result, commentLines);
   const fork = isForkPullRequest();
 
   if (fork) {
@@ -180,7 +195,11 @@ async function main(): Promise<void> {
   // The comment/summary step never gates the run — only findings do, and
   // only when `fail-on` says they should.
   if (result.conclusion === "failure") {
-    core.setFailed(`Ctrl Alt Delegate found ${result.findings.length} finding(s).`);
+    core.setFailed(
+      evaluation
+        ? `Ctrl Alt Delegate observed ${evaluation.enforced.length} finding(s) under rules your company enforces.`
+        : `Ctrl Alt Delegate found ${result.findings.length} finding(s).`,
+    );
   }
 }
 
