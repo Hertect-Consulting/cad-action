@@ -22,6 +22,14 @@ inputs:
     description: "Token used to post the sticky PR comment. Defaults to GITHUB_TOKEN."
     required: false
     default: ${{ github.token }}
+  license-credential:
+    description: "Optional. Your company's Ctrl Alt Delegate license credential, from a repository secret, never written into the workflow. With cad-url, the Action reads your company's policy, read only, and fails the check only for rules your company enforces and this run observed. Empty, expired or not accepted, the Action says so in one line and runs its built in checks."
+    required: false
+    default: ""
+  cad-url:
+    description: "Optional. The Ctrl Alt Delegate address your company uses, for example https://cad.example.com. Used only with license-credential. The one request carries the credential and nothing about the repository."
+    required: false
+    default: ""
 
 outputs:
   findings-json:
@@ -29,7 +37,9 @@ outputs:
   finding-count:
     description: "Total number of findings."
   conclusion:
-    description: "success or failure, per the fail-on input."
+    description: "success or failure, per the fail-on input, or per your company policy when it is applied."
+  policy-status:
+    description: "not-configured, applied, enforcement-off, expired, invalid or unreachable. Whether and how the company policy was applied."
 
 runs:
   using: "node20"

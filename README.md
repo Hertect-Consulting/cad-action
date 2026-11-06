@@ -30,6 +30,25 @@ jobs:
 
 `fail-on` sets what fails the check: `all` (default), `dead-only` (dead command and dead path findings only), or `none` to report without going red. `paths` adds extra file globs to discover, on top of the built-in rules-and-skills list below.
 
+## Company policy (optional)
+
+A company that has turned on enforcement in Ctrl Alt Delegate can have this Action fail the check on the company's own policy, and only on that. Give the Action two inputs. Without both, nothing changes and no request is made.
+
+```yaml
+      - uses: Hertect-Consulting/cad-action@v1
+        with:
+          cad-url: https://your-company.example
+          license-credential: ${{ secrets.CAD_LICENSE_CREDENTIAL }}
+```
+
+The credential must come from a repository secret, never written into the workflow file. Pull requests from forks get no secrets, so the Action says the credential is empty and runs as usual.
+
+With both inputs the Action makes one read only request to Ctrl Alt Delegate for the company's policy, with the credential and nothing else: no repository name, no file path, no file text. It maps its own findings to the rules your company enforces and sets the check conclusion to failure only for an enforced rule it observed. A dead command is observed under `builtin.dead_command`, and a dead path under `builtin.broken_repository_reference`. The other three checks restate no rule, so the company policy never fails on them. The comment gains a Company policy section that says, for each enforced rule, observed, not observed, or not checked by this Action. Findings are listed as before. While a policy is applied, your company's choice decides the conclusion in place of `fail-on`.
+
+If the credential has expired, is not accepted, or Ctrl Alt Delegate cannot be reached, the Action writes one line saying so and runs its built in checks with `fail-on`, as it does without the inputs. It never fails a pull request because the policy could not be read. The `policy-status` output says which of these happened: `not-configured`, `applied`, `enforcement-off`, `expired`, `invalid` or `unreachable`.
+
+The policy is fetched fresh on every run and never cached. Reading it needs no new permission, and the Action still writes nothing beyond the comment and suggested changes it already posts.
+
 ## What it checks
 
 Five checks, each a finding with file, line, and one sentence. Prose counts: a heading-style file, a one-paragraph CLAUDE.md, or a Cursor rule with no headings is read line by line, not only the five-line shape, and every line of a `sh`, `bash`, `shell` or unlabelled code fence is read as a command.
@@ -73,7 +92,7 @@ If you can't write the Check line, the rule is a wish, not a rule. Starter files
 
 ## What it never does
 
-Writes to your repo, opens PRs, rewrites your rules, sends your data anywhere, looks at other repos, or keeps state between runs. A suggested change is a review comment; nothing lands until a person accepts it.
+Writes to your repo, opens PRs, rewrites your rules, sends your data anywhere, looks at other repos, or keeps state between runs. With the optional company policy inputs it makes one read only request that carries your license credential and nothing about the repository. A suggested change is a review comment; nothing lands until a person accepts it.
 
 ## Notes
 

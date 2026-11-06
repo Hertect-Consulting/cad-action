@@ -36,12 +36,17 @@ const CHECK_LABEL: Record<CheckId, string> = {
 const TAGLINE = "Your AI tools know what you told them. Ctrl Alt Delegate knows what everyone told theirs.";
 const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)";
 
-export function buildComment(result: RunResult): string {
+/**
+ * `policyLines` is the company policy section (src/policy.ts), empty unless the Action was given
+ * a license credential. It sits above the findings, which are listed as they always were.
+ */
+export function buildComment(result: RunResult, policyLines: string[] = []): string {
   const lines: string[] = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
 
   lines.push(...inventoryLines(result.inventory));
   for (const note of result.notes) lines.push(note.sentence, "");
   lines.push(...instructionChangeLines(result.instructionChanges));
+  lines.push(...policyLines);
 
   if (result.findings.length === 0) {
     lines.push("No findings.", "");
