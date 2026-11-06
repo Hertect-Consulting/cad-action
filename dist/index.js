@@ -31938,7 +31938,7 @@ function exportVariable(name, val) {
  * ```
  */
 function core_setSecret(secret) {
-    issueCommand('add-mask', {}, secret);
+    command_issueCommand('add-mask', {}, secret);
 }
 /**
  * Prepends inputPath to the PATH (for this action and future actions)
@@ -37211,12 +37211,17 @@ const CHECK_LABEL = {
 };
 const TAGLINE = "Your AI tools know what you told them. Ctrl Alt Delegate knows what everyone told theirs.";
 const TAGLINE_LINK = "[hertect.com/ctrl-alt-delegate](https://hertect.com/ctrl-alt-delegate)";
-function buildComment(result) {
+/**
+ * `policyLines` is the company policy section (src/policy.ts), empty unless the Action was given
+ * a license credential. It sits above the findings, which are listed as they always were.
+ */
+function buildComment(result, policyLines = []) {
     const lines = [COMMENT_MARKER, "## Ctrl Alt Delegate", ""];
     lines.push(...inventoryLines(result.inventory));
     for (const note of result.notes)
         lines.push(note.sentence, "");
     lines.push(...instructionChangeLines(result.instructionChanges));
+    lines.push(...policyLines);
     if (result.findings.length === 0) {
         lines.push("No findings.", "");
     }
@@ -37315,6 +37320,206 @@ function proposalText(f) {
     return f.proposal.suggested
         ? ` Ctrl Alt Delegate proposes ${fix} as a suggested change on this line; a person decides.`
         : ` Ctrl Alt Delegate proposes ${fix}; this line is not in the pull request's diff, so no suggested change was posted.`;
+}
+
+;// CONCATENATED MODULE: ./src/policy.ts
+/**
+ * Enforcement of a company's own policy (Ctrl Alt Delegate build plan item 25).
+ *
+ * Optional. Given the two inputs, the Action asks Ctrl Alt Delegate for the company's policy,
+ * read only, with the company's license credential, and fails the check only for a rule the
+ * company enforces and this run observed. Without them nothing here runs and nothing is
+ * requested. Ctrl Alt Delegate never decides what fails a pull request: with no company choice,
+ * nothing is enforced.
+ *
+ * What this module never does: write to the repository or to GitHub, send anything about the
+ * repository (the one request carries the credential and nothing else), read another repository,
+ * or keep anything between runs. The policy is fetched on each run and held in memory.
+ */
+const POLICY_PATH = "/api/action/policy";
+const POLICY_SCHEMA = "cad.action-policy.v1";
+const POLICY_TIMEOUT_MS = 10_000;
+/**
+ * The Action's own checks that restate a rule in the company's built in policy. The other three
+ * (no Check line, no instruction file, contradiction) restate none, so a company policy never
+ * fails on them. The keys are the rule keys Ctrl Alt Delegate publishes.
+ */
+const RULE_FOR_CHECK = {
+    "dead-command": "builtin.dead_command",
+    "dead-path": "builtin.broken_repository_reference",
+};
+/** What the comment calls each rule the Action can observe. A rule not listed shows its key. */
+const RULE_LABEL = {
+    "builtin.dead_command": "Commands an instruction names are defined",
+    "builtin.broken_repository_reference": "Paths an instruction names exist",
+};
+/** The base URL with no path, query or credentials, or null. https only, except for a local address. */
+function policyUrl(baseUrl) {
+    let url;
+    try {
+        url = new URL(baseUrl.trim());
+    }
+    catch {
+        return null;
+    }
+    const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && local))
+        return null;
+    if (url.username || url.password || url.search || url.hash)
+        return null;
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}${POLICY_PATH}`;
+}
+function parsePolicy(body) {
+    if (!body || typeof body !== "object")
+        return null;
+    const b = body;
+    const policy = b.policy;
+    const enforcement = b.enforcement;
+    if (b.schema !== POLICY_SCHEMA ||
+        !policy || typeof policy.key !== "string" || !Number.isSafeInteger(policy.catalogueVersion) ||
+        !enforcement || typeof enforcement.enabled !== "boolean" || !Number.isSafeInteger(enforcement.settingsVersion) ||
+        !Array.isArray(b.rules)) {
+        return null;
+    }
+    const rules = [];
+    for (const rule of b.rules) {
+        const r = rule;
+        if (!r || typeof r.key !== "string" || !Number.isSafeInteger(r.version) || typeof r.enforced !== "boolean")
+            return null;
+        rules.push({ key: r.key, version: r.version, enforced: r.enforced });
+    }
+    return {
+        policyKey: policy.key,
+        catalogueVersion: policy.catalogueVersion,
+        enforcementEnabled: enforcement.enabled,
+        settingsVersion: enforcement.settingsVersion,
+        rules,
+    };
+}
+/**
+ * One GET. The credential is the bearer and the only thing sent. A redirect is refused so the
+ * credential is never forwarded, a slow answer is abandoned, and any answer this does not
+ * recognise is "unreachable" or "invalid", never a reason to fail the check.
+ */
+async function fetchPolicy(baseUrl, credential, fetchImpl = fetch, timeoutMs = POLICY_TIMEOUT_MS) {
+    const url = policyUrl(baseUrl);
+    if (!url)
+        return { status: "unreachable" };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetchImpl(url, {
+            method: "GET",
+            headers: { authorization: `Bearer ${credential}`, accept: "application/json" },
+            redirect: "error",
+            signal: controller.signal,
+        });
+        if (response.status === 401) {
+            let code;
+            try {
+                code = (await response.json())?.error;
+            }
+            catch {
+                code = undefined;
+            }
+            return { status: code === "credential_expired" ? "expired" : "invalid" };
+        }
+        if (response.status === 403)
+            return { status: "invalid" };
+        if (!response.ok)
+            return { status: "unreachable" };
+        const policy = parsePolicy(await response.json());
+        return policy ? { status: "applied", policy } : { status: "unreachable" };
+    }
+    catch {
+        return { status: "unreachable" };
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+const LINES = {
+    expired: "Company policy not applied: the license credential has expired. The built in checks ran as usual.",
+    invalid: "Company policy not applied: Ctrl Alt Delegate did not accept the license credential. The built in checks ran as usual.",
+    unreachable: "Company policy not applied: Ctrl Alt Delegate could not be reached or gave an answer this Action does not recognise. The built in checks ran as usual.",
+};
+/**
+ * Decides whether and how the policy applies. With neither input set, nothing happens and no
+ * request is made. With a URL and an empty credential (a pull request from a fork gets no
+ * secrets) it says so and runs as before.
+ */
+async function resolvePolicy(inputs, fetchImpl, timeoutMs) {
+    const credential = inputs.credential.trim();
+    const baseUrl = inputs.baseUrl.trim();
+    if (!credential && !baseUrl)
+        return { status: "not-configured", line: "" };
+    if (!credential || !baseUrl) {
+        return {
+            status: "not-configured",
+            line: credential
+                ? "Company policy not applied: the license credential is set but the Ctrl Alt Delegate address is not. The built in checks ran as usual."
+                : "Company policy not applied: the license credential is empty, which is the case for pull requests from forks. The built in checks ran as usual.",
+        };
+    }
+    const fetched = await fetchPolicy(baseUrl, credential, fetchImpl, timeoutMs);
+    if (fetched.status !== "applied")
+        return { status: fetched.status, line: LINES[fetched.status] };
+    if (!fetched.policy.enforcementEnabled) {
+        return {
+            status: "enforcement-off",
+            line: "Company policy read: your company has not turned enforcement on, so the built in checks ran as usual.",
+            policy: fetched.policy,
+        };
+    }
+    return { status: "applied", line: "", policy: fetched.policy };
+}
+/** Maps the Action's own findings to the enforced rules. Pure. */
+function evaluatePolicy(policy, findings) {
+    const enforcedKeys = policy.rules.filter((r) => r.enforced).map((r) => r.key);
+    const observable = new Set(Object.values(RULE_FOR_CHECK));
+    const rules = enforcedKeys.map((key) => ({
+        key,
+        label: RULE_LABEL[key] ?? key,
+        checked: observable.has(key),
+        findings: findings.filter((f) => RULE_FOR_CHECK[f.check] === key),
+    }));
+    return { rules, enforced: rules.flatMap((r) => r.findings) };
+}
+/** The check conclusion under the company's policy. Only an enforced rule that was observed gives failure. */
+function policyConclusion(evaluation) {
+    return evaluation.enforced.length > 0 ? "failure" : "success";
+}
+/** The comment section for a policy that was read. Words: observed, not observed. */
+function policyCommentLines(step, evaluation) {
+    if (step.status === "not-configured" && !step.line)
+        return [];
+    if (!evaluation || !step.policy)
+        return step.line ? ["### Company policy", "", step.line, ""] : [];
+    const lines = ["### Company policy", "", `Applied your company's policy from Ctrl Alt Delegate (settings version ${step.policy.settingsVersion}). Only the rules your company enforces are listed.`, ""];
+    for (const rule of evaluation.rules) {
+        const outcome = !rule.checked
+            ? "not checked by this Action"
+            : rule.findings.length === 0
+                ? "not observed"
+                : `observed ${rule.findings.length} time${rule.findings.length === 1 ? "" : "s"}`;
+        lines.push(`- ${rule.label} (\`${rule.key}\`): ${outcome}`);
+    }
+    lines.push("");
+    lines.push(evaluation.enforced.length > 0
+        ? "An enforced rule was observed, so the check conclusion is failure."
+        : "No enforced rule was observed, so the check conclusion is success.", "");
+    return lines;
+}
+/** The whole optional step, for one run: fetch, map, decide the conclusion, and say what happened. */
+async function applyCompanyPolicy(result, inputs, fetchImpl, timeoutMs) {
+    const step = await resolvePolicy(inputs, fetchImpl, timeoutMs);
+    const evaluation = step.status === "applied" && step.policy ? evaluatePolicy(step.policy, result.findings) : undefined;
+    return {
+        step,
+        evaluation,
+        conclusion: evaluation ? policyConclusion(evaluation) : result.conclusion,
+        commentLines: policyCommentLines(step, evaluation),
+    };
 }
 
 ;// CONCATENATED MODULE: ./src/scan.ts
@@ -39097,6 +39302,7 @@ function run(options) {
 
 
 
+
 function splitList(value) {
     return value
         .split(/[\n,]/)
@@ -39228,12 +39434,26 @@ async function main() {
         changedFiles,
     };
     const result = run(options);
+    // Optional: the company's own policy, read only, with its license credential. Without the two
+    // inputs nothing is requested and the checks decide as they always have. With them, a policy
+    // that is applied replaces `fail-on` for the conclusion; anything else falls back to it.
+    const credential = getInput("license-credential");
+    if (credential)
+        core_setSecret(credential);
+    const { step, evaluation, conclusion, commentLines } = await applyCompanyPolicy(result, {
+        credential,
+        baseUrl: getInput("cad-url"),
+    });
+    result.conclusion = conclusion;
+    if (step.line)
+        warning(step.line);
+    setOutput("policy-status", step.status);
     const findingsJson = JSON.stringify(result.findings, null, 2);
     setOutput("findings-json", findingsJson);
     setOutput("finding-count", String(result.findings.length));
     setOutput("conclusion", result.conclusion);
     info(`Ctrl Alt Delegate: ${result.findings.length} finding(s) across ${result.ruleCount} rule(s) in ${result.fileCount} file(s).`);
-    const body = buildComment(result);
+    const body = buildComment(result, commentLines);
     const fork = isForkPullRequest();
     if (fork) {
         info("Fork pull request: GITHUB_TOKEN is read-only here, so findings go to the job summary instead of a PR comment.");
@@ -39267,7 +39487,9 @@ async function main() {
     // The comment/summary step never gates the run — only findings do, and
     // only when `fail-on` says they should.
     if (result.conclusion === "failure") {
-        setFailed(`Ctrl Alt Delegate found ${result.findings.length} finding(s).`);
+        setFailed(evaluation
+            ? `Ctrl Alt Delegate observed ${evaluation.enforced.length} finding(s) under rules your company enforces.`
+            : `Ctrl Alt Delegate found ${result.findings.length} finding(s).`);
     }
 }
 // Guarded so importing this module in tests (e.g. to test isForkPullRequest)
